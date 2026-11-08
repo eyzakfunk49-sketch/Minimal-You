@@ -27,6 +27,13 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.core.graphics.drawable.toBitmap
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.draw.alpha
@@ -454,6 +461,9 @@ private fun Home(
         HourFormat.H12 -> false
         HourFormat.H24 -> true
     }
+    val curDrawer by rememberUpdatedState(onOpenDrawer)
+    val curNotifications by rememberUpdatedState(onNotifications)
+    val curWidgets by rememberUpdatedState(onOpenWidgets)
     val showStatus = cfg.hideStatusBar && (cfg.showBattery || cfg.showWifi || cfg.showSignal)
     val status by rememberStatus(showStatus)
 
@@ -468,30 +478,36 @@ private fun Home(
                     detectTapGestures(onDoubleTap = { onSleep() }, onLongPress = { onSettings() })
                 }
             }
-            // Swipe up = app list, swipe down = notifications.
-            .pointerInput(gesturesEnabled) {
-                if (gesturesEnabled) {
-                    var total = 0f
-                    detectVerticalDragGestures(
-                        onDragStart = { total = 0f },
-                        onDragEnd = {
-                            if (total < -120f) onOpenDrawer() else if (total > 120f) onNotifications()
-                        },
-                        onDragCancel = {},
-                        onVerticalDrag = { _, dy -> total += dy },
-                    )
-                }
-            }
-            // Swipe right = widgets page (when enabled in Settings).
+            // One detector for all swipes so they can't steal from each other:
+            // down = notifications, up = app list, right = widgets page (if enabled).
+            // It watches without consuming and fires as soon as the swipe is clearly intentional.
             .pointerInput(gesturesEnabled, cfg.widgetsOn) {
-                if (gesturesEnabled && cfg.widgetsOn) {
-                    var total = 0f
-                    detectHorizontalDragGestures(
-                        onDragStart = { total = 0f },
-                        onDragEnd = { if (total > 120f) onOpenWidgets() },
-                        onDragCancel = {},
-                        onHorizontalDrag = { _, dx -> total += dx },
-                    )
+                if (!gesturesEnabled) return@pointerInput
+                awaitEachGesture {
+                    val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val startTime = first.uptimeMillis
+                    var dx = 0f
+                    var dy = 0f
+                    var held = false
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == first.id } ?: break
+                        if (!change.pressed) break
+                        val delta = change.positionChange()
+                        dx += delta.x
+                        dy += delta.y
+                        // A press-and-hold is a long press (Settings), not a swipe.
+                        if (change.uptimeMillis - startTime >= 450L && abs(dx) + abs(dy) < 24f) held = true
+                        if (held) continue
+                        if (abs(dy) > 90f && abs(dy) > 1.5f * abs(dx)) {
+                            if (dy > 0f) curNotifications() else curDrawer()
+                            break
+                        }
+                        if (cfg.widgetsOn && dx > 120f && dx > 1.5f * abs(dy)) {
+                            curWidgets()
+                            break
+                        }
+                    }
                 }
             },
     ) {
@@ -1416,26 +1432,103 @@ private fun writeWidgetIds(ctx: Context, ids: List<Int>) {
     appPrefs(ctx).edit().putString("widget_ids", ids.joinToString(",")).apply()
 }
 
+/** A drag handle. Reports total drag distance in px since the touch began, measured on screen so it stays accurate while the handle itself moves. */
 @Composable
-private fun StepBtn(symbol: String, description: String, p: Palette, onClick: () -> Unit) {
+private fun ResizeHandle(
+    horizontal: Boolean,
+    p: Palette,
+    description: String,
+    onStart: () -> Unit,
+    onTotal: (Float) -> Unit,
+    onEnd: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val start by rememberUpdatedState(onStart)
+    val total by rememberUpdatedState(onTotal)
+    val end by rememberUpdatedState(onEnd)
+    val origin = remember { floatArrayOf(0f, 0f) }
     Box(
-        Modifier
-            .size(48.dp)
-            .clickable(role = Role.Button, onClick = onClick)
+        modifier
+            .size(width = if (horizontal) 40.dp else 140.dp, height = if (horizontal) 140.dp else 40.dp)
+            .onGloballyPositioned { c ->
+                val o = c.positionInRoot()
+                origin[0] = o.x
+                origin[1] = o.y
+            }
+            .pointerInput(horizontal) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    start()
+                    val startAbs = if (horizontal) origin[0] + down.position.x else origin[1] + down.position.y
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        val abs = if (horizontal) origin[0] + change.position.x else origin[1] + change.position.y
+                        total(abs - startAbs)
+                        change.consume()
+                    }
+                    end()
+                }
+            }
             .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
-        BasicText(symbol, style = ts(p.accent, 28.sp, FontWeight.Normal))
+        Box(
+            Modifier
+                .size(width = if (horizontal) 20.dp else 64.dp, height = if (horizontal) 64.dp else 20.dp)
+                .background(p.bg.copy(alpha = 0.75f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                Modifier
+                    .size(width = if (horizontal) 4.dp else 36.dp, height = if (horizontal) 36.dp else 4.dp)
+                    .background(p.accent, CircleShape),
+            )
+        }
+    }
+}
+
+/** The widget's own preview picture (what Android shows in its widget picker), if it provides one. */
+@Composable
+private fun WidgetPreview(info: AppWidgetProviderInfo, ctx: Context) {
+    val image = remember(info) {
+        try {
+            val d = info.loadPreviewImage(ctx, 0)
+            if (d == null) null else {
+                val w = d.intrinsicWidth.coerceAtLeast(1)
+                val h = d.intrinsicHeight.coerceAtLeast(1)
+                val scale = (480f / w).coerceAtMost(1f)
+                d.toBitmap((w * scale).toInt().coerceAtLeast(1), (h * scale).toInt().coerceAtLeast(1)).asImageBitmap()
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+    if (image != null) {
+        Image(
+            bitmap = image,
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .padding(top = 8.dp)
+                .heightIn(max = 110.dp)
+                .widthIn(max = 260.dp)
+                .clip(RoundedCornerShape(12.dp)),
+        )
     }
 }
 
 @Composable
-private fun SizeRow(label: String, value: String, p: Palette, onLess: () -> Unit, onMore: () -> Unit, lessDesc: String, moreDesc: String) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        BasicText(label, style = ts(p.muted, 15.sp, FontWeight.Normal), modifier = Modifier.weight(1f))
-        StepBtn("\u2212", lessDesc, p, onLess)
-        BasicText(value, style = ts(p.ink, 15.sp, FontWeight.Normal), modifier = Modifier.width(64.dp))
-        StepBtn("+", moreDesc, p, onMore)
+private fun Chevron(up: Boolean, color: Color) {
+    Canvas(Modifier.size(18.dp)) {
+        val s = size.minDimension
+        val w = s * 0.11f
+        val y1 = if (up) 0.65f else 0.35f
+        val y2 = if (up) 0.3f else 0.7f
+        drawLine(color, Offset(s * 0.15f, s * y1), Offset(s * 0.5f, s * y2), strokeWidth = w, cap = StrokeCap.Round)
+        drawLine(color, Offset(s * 0.5f, s * y2), Offset(s * 0.85f, s * y1), strokeWidth = w, cap = StrokeCap.Round)
     }
 }
 
@@ -1474,6 +1567,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
         onDispose { try { host.stopListening() } catch (_: Exception) { } }
     }
     BackHandler(enabled = choosing) { choosing = false }
+    LaunchedEffect(ids.isEmpty()) { if (ids.isEmpty()) editing = false }
 
     fun addId(id: Int) {
         ids = ids + id
@@ -1554,15 +1648,17 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
         ) {
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 BasicText("Widgets", style = ts(p.ink, 34.sp), modifier = Modifier.weight(1f))
-                BasicText(
-                    if (editing) "Done" else "Edit",
-                    style = ts(p.accent, 16.sp, FontWeight.Medium),
-                    modifier = Modifier
-                        .heightIn(min = 52.dp)
-                        .clickable(role = Role.Button) { editing = !editing }
-                        .wrapContentHeight(Alignment.CenterVertically)
-                        .padding(horizontal = 16.dp),
-                )
+                if (ids.isNotEmpty()) {
+                    BasicText(
+                        if (editing) "Done" else "Edit",
+                        style = ts(p.accent, 16.sp, FontWeight.Medium),
+                        modifier = Modifier
+                            .heightIn(min = 52.dp)
+                            .clickable(role = Role.Button) { editing = !editing }
+                            .wrapContentHeight(Alignment.CenterVertically)
+                            .padding(horizontal = 16.dp),
+                    )
+                }
                 BasicText(
                     "Add",
                     style = ts(p.accent, 16.sp, FontWeight.Medium),
@@ -1579,6 +1675,13 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                     modifier = Modifier.padding(top = 16.dp),
                 )
             }
+            if (editing && ids.isNotEmpty()) {
+                BasicText(
+                    "Drag the handles on a widget to resize it.",
+                    style = ts(p.muted, 14.sp, FontWeight.Normal),
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
             LazyColumn(contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp)) {
                 items(ids, key = { it }) { id ->
                     val info = manager.getAppWidgetInfo(id)
@@ -1589,46 +1692,52 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                         val heightDp = heights[id] ?: defaultHeight
                         val widthPct = widths[id] ?: 100
                         val widgetWidthDp = (screenWidthDp * widthPct / 100).coerceAtLeast(40)
+                        val startSize = remember(id) { floatArrayOf(0f) }
                         Column {
-                            AndroidView(
-                                factory = { c -> host.createView(c, id, info) },
-                                update = { v ->
-                                    v.updateAppWidgetSize(Bundle(), widgetWidthDp, heightDp, widgetWidthDp, heightDp)
-                                },
-                                modifier = Modifier
+                            Box(
+                                Modifier
                                     .fillMaxWidth(widthPct / 100f)
-                                    .height(heightDp.dp)
-                                    .clip(RoundedCornerShape(24.dp)),
-                            )
+                                    .height(heightDp.dp),
+                            ) {
+                                AndroidView(
+                                    factory = { c -> host.createView(c, id, info) },
+                                    update = { v ->
+                                        v.updateAppWidgetSize(Bundle(), widgetWidthDp, heightDp, widgetWidthDp, heightDp)
+                                    },
+                                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)),
+                                )
+                                if (editing) {
+                                    Box(Modifier.fillMaxSize().border(2.dp, p.accent, RoundedCornerShape(24.dp)))
+                                    ResizeHandle(
+                                        horizontal = false,
+                                        p = p,
+                                        description = "Drag to change widget height",
+                                        onStart = { startSize[0] = heightDp.toFloat() },
+                                        onTotal = { px ->
+                                            heights[id] = (startSize[0] + px / density.density).toInt().coerceIn(64, 640)
+                                        },
+                                        onEnd = {
+                                            appPrefs(ctx).edit().putInt("widget_h_$id", heights[id] ?: heightDp).apply()
+                                        },
+                                        modifier = Modifier.align(Alignment.BottomCenter),
+                                    )
+                                    ResizeHandle(
+                                        horizontal = true,
+                                        p = p,
+                                        description = "Drag to change widget width",
+                                        onStart = { startSize[0] = widgetWidthDp.toFloat() },
+                                        onTotal = { px ->
+                                            val w = startSize[0] + px / density.density
+                                            widths[id] = (w / screenWidthDp * 100f).toInt().coerceIn(40, 100)
+                                        },
+                                        onEnd = {
+                                            appPrefs(ctx).edit().putInt("widget_w_$id", widths[id] ?: widthPct).apply()
+                                        },
+                                        modifier = Modifier.align(Alignment.CenterEnd),
+                                    )
+                                }
+                            }
                             if (editing) {
-                                SizeRow(
-                                    "Height", "$heightDp", p,
-                                    onLess = {
-                                        val v = (heightDp - 40).coerceAtLeast(64)
-                                        heights[id] = v
-                                        appPrefs(ctx).edit().putInt("widget_h_$id", v).apply()
-                                    },
-                                    onMore = {
-                                        val v = (heightDp + 40).coerceAtMost(640)
-                                        heights[id] = v
-                                        appPrefs(ctx).edit().putInt("widget_h_$id", v).apply()
-                                    },
-                                    lessDesc = "Make widget shorter", moreDesc = "Make widget taller",
-                                )
-                                SizeRow(
-                                    "Width", "$widthPct%", p,
-                                    onLess = {
-                                        val v = (widthPct - 10).coerceAtLeast(40)
-                                        widths[id] = v
-                                        appPrefs(ctx).edit().putInt("widget_w_$id", v).apply()
-                                    },
-                                    onMore = {
-                                        val v = (widthPct + 10).coerceAtMost(100)
-                                        widths[id] = v
-                                        appPrefs(ctx).edit().putInt("widget_w_$id", v).apply()
-                                    },
-                                    lessDesc = "Make widget narrower", moreDesc = "Make widget wider",
-                                )
                                 BasicText(
                                     "Remove",
                                     style = ts(p.accent, 15.sp, FontWeight.Medium),
@@ -1647,9 +1756,32 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
 
         if (choosing) {
             val pm = ctx.packageManager
-            val providers = remember {
-                manager.installedProviders.sortedBy { it.loadLabel(pm).toString().lowercase() }
+            val dpi = ctx.resources.displayMetrics.density
+            // One entry per app; apps with several widgets expand to show them.
+            val groups = remember {
+                manager.installedProviders
+                    .groupBy { it.provider.packageName }
+                    .map { (pkg, list) ->
+                        val appLabel = try {
+                            list.first().providerInfo.applicationInfo.loadLabel(pm).toString()
+                        } catch (_: Exception) {
+                            list.first().loadLabel(pm).toString()
+                        }
+                        Triple(pkg, appLabel, list.sortedBy { it.loadLabel(pm).toString().lowercase() })
+                    }
+                    .sortedBy { it.second.lowercase() }
             }
+            var expanded by remember { mutableStateOf<String?>(null) }
+
+            fun detail(info: AppWidgetProviderInfo): String {
+                val cw = if (info.targetCellWidth > 0) info.targetCellWidth
+                else (((info.minWidth / dpi) + 30) / 70).toInt().coerceAtLeast(1)
+                val ch = if (info.targetCellHeight > 0) info.targetCellHeight
+                else (((info.minHeight / dpi) + 30) / 70).toInt().coerceAtLeast(1)
+                val desc = try { info.loadDescription(ctx)?.toString() } catch (_: Exception) { null }
+                return listOfNotNull("$cw \u00D7 $ch", desc?.takeIf { it.isNotBlank() }).joinToString(" \u00B7 ")
+            }
+
             Column(
                 Modifier
                     .fillMaxSize()
@@ -1669,18 +1801,69 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                 )
                 BasicText("Add a widget", style = ts(p.ink, 28.sp))
                 LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp)) {
-                    items(providers) { info ->
-                        BasicText(
-                            info.loadLabel(pm).toString(),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = ts(p.ink, 20.sp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 52.dp)
-                                .clickable(role = Role.Button) { pick(info) }
-                                .wrapContentHeight(Alignment.CenterVertically),
-                        )
+                    items(groups, key = { it.first }) { (pkg, appLabel, list) ->
+                        Column {
+                            if (list.size == 1) {
+                                val info = list[0]
+                                val widgetLabel = info.loadLabel(pm).toString()
+                                val sub = listOf(widgetLabel.takeIf { it != appLabel }, detail(info))
+                                    .filterNotNull()
+                                    .filter { it.isNotBlank() }
+                                    .joinToString(" \u00B7 ")
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 56.dp)
+                                        .clickable(role = Role.Button) { pick(info) }
+                                        .padding(vertical = 8.dp),
+                                ) {
+                                    BasicText(appLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.ink, 20.sp))
+                                    if (sub.isNotBlank()) {
+                                        BasicText(sub, maxLines = 2, overflow = TextOverflow.Ellipsis, style = ts(p.muted, 13.sp, FontWeight.Normal))
+                                    }
+                                    WidgetPreview(info, ctx)
+                                }
+                            } else {
+                                val open = expanded == pkg
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 56.dp)
+                                        .clickable(role = Role.Button) { expanded = if (open) null else pkg }
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        BasicText(appLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.ink, 20.sp))
+                                        BasicText("${list.size} widgets", style = ts(p.muted, 13.sp, FontWeight.Normal))
+                                    }
+                                    Chevron(open, p.accent)
+                                }
+                                if (open) {
+                                    list.forEach { info ->
+                                        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(start = 8.dp)) {
+                                            Box(Modifier.width(2.dp).fillMaxHeight().background(p.accent.copy(alpha = 0.5f)))
+                                            Column(
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .heightIn(min = 52.dp)
+                                                    .clickable(role = Role.Button) { pick(info) }
+                                                    .padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
+                                            ) {
+                                                BasicText(
+                                                    info.loadLabel(pm).toString(),
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    style = ts(p.ink, 18.sp),
+                                                )
+                                                BasicText(detail(info), maxLines = 2, overflow = TextOverflow.Ellipsis, style = ts(p.muted, 13.sp, FontWeight.Normal))
+                                                WidgetPreview(info, ctx)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
