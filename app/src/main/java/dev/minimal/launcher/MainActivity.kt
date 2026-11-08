@@ -312,6 +312,14 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     val settingsP = remember { Animatable(0f) }
     LaunchedEffect(settingsOpen) { settingsP.animateTo(if (settingsOpen) 1f else 0f, drawerSpec) }
     val settingsVisible by remember { derivedStateOf { settingsP.value > 0.001f } }
+    // The Home search bar glides up into the search page's bar instead of a new one appearing.
+    var homePillY by remember { mutableStateOf(-1f) }
+    val density = LocalDensity.current
+    val searchPillTop = with(density) {
+        WindowInsets.systemBars.union(WindowInsets.displayCutout).getTop(density) + 24.dp.toPx()
+    }
+    val pillFlying by remember { derivedStateOf { searchP.value > 0.001f && searchP.value < 0.985f } }
+    val pillSettled by remember { derivedStateOf { searchP.value >= 0.985f } }
     val searchVisible by remember { derivedStateOf { searchP.value > 0.001f } }
     val widgetsP = remember { Animatable(0f) }
     LaunchedEffect(widgetsOpen) { widgetsP.animateTo(if (widgetsOpen) 1f else 0f, drawerSpec) }
@@ -489,6 +497,10 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     pageScope.launch { drawerP.animateTo(if (open) 1f else 0f, drawerSpec, initialVelocity = 0f) }
                 },
                 drawerProgress = { maxOf(drawerP.value, searchP.value) },
+                searchProgress = { searchP.value },
+                onPillPos = { y ->
+                    if (searchP.value < 0.001f && drawerP.value < 0.001f && widgetsP.value < 0.001f && settingsP.value < 0.001f) homePillY = y
+                },
                 onOpenSearch = { searchOpen = true },
                 onSearchDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { searchP.snapTo(f.coerceIn(0f, 1f)) } },
                 onSearchEnd = { velocity ->
@@ -565,6 +577,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     SearchScreen(
                         p, cfg, visibleApps,
                         active = searchOpen,
+                        pillShown = pillSettled,
                         onClose = { searchOpen = false },
                         onDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { searchP.snapTo(f.coerceIn(0f, 1f)) } },
                         onEnd = { v ->
@@ -574,6 +587,17 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                             pageScope.launch { searchP.animateTo(if (open) 1f else 0f, drawerSpec) }
                         },
                     )
+                }
+            }
+            if (pillFlying && homePillY >= 0f) {
+                Box(Modifier.fillMaxSize().padding(horizontal = 32.dp)) {
+                    Pill(p, Modifier.graphicsLayer {
+                        translationY = homePillY + (searchPillTop - homePillY) * searchP.value
+                    }) {
+                        SearchIcon(p.accent)
+                        Spacer(Modifier.width(12.dp))
+                        BasicText("Search anything", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                    }
                 }
             }
             if (settingsVisible) Box(Modifier.fillMaxSize().graphicsLayer {
@@ -701,6 +725,8 @@ private fun Home(
     onOpenSearch: () -> Unit,
     onSearchDrag: (Float) -> Unit,
     onSearchEnd: (Float) -> Unit,
+    searchProgress: () -> Float,
+    onPillPos: (Float) -> Unit,
     onSettings: () -> Unit,
     onSleep: () -> Unit,
     onNotifications: () -> Unit,
@@ -881,7 +907,16 @@ private fun Home(
             )
         }
         Spacer(Modifier.height(32.dp))
-        Pill(p, Modifier.graphicsLayer { alpha = (1f - drawerProgress() * 4f).coerceIn(0f, 1f) }.softClick(role = Role.Button, onClick = onOpenSearch)) {
+        Pill(
+            p,
+            Modifier
+                .onGloballyPositioned { onPillPos(it.positionInRoot().y) }
+                .graphicsLayer {
+                    // Hidden the moment the flying copy takes over during the search transition.
+                    alpha = if (searchProgress() > 0.001f) 0f else (1f - drawerProgress() * 4f).coerceIn(0f, 1f)
+                }
+                .softClick(role = Role.Button, onClick = onOpenSearch),
+        ) {
             SearchIcon(p.accent)
             Spacer(Modifier.width(12.dp))
             BasicText("Search anything", style = ts(p.muted, 16.sp, FontWeight.Normal))
@@ -1108,6 +1143,7 @@ private fun SearchScreen(
     cfg: Config,
     apps: List<App>,
     active: Boolean,
+    pillShown: Boolean,
     onClose: () -> Unit,
     onDrag: (Float) -> Unit,
     onEnd: (Float) -> Unit,
@@ -1194,7 +1230,7 @@ private fun SearchScreen(
             .padding(horizontal = 32.dp),
     ) {
         Spacer(Modifier.height(24.dp))
-        Pill(p) {
+        Pill(p, Modifier.graphicsLayer { alpha = if (pillShown) 1f else 0f }) {
             SearchIcon(p.accent)
             Spacer(Modifier.width(12.dp))
             BasicTextField(
