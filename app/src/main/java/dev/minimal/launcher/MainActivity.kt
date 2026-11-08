@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -171,6 +172,9 @@ class MainActivity : ComponentActivity() {
 
 // Where the last touch landed and the window view, so apps can zoom open from the tapped spot.
 internal var launchView: android.view.View? = null
+
+/** Where the app name you just tapped is on screen, so the app can open from it. Set by [AppRow]. */
+internal var tappedTextBounds: androidx.compose.ui.geometry.Rect? = null
 internal var lastTouch = Offset.Zero
 internal var launching by mutableStateOf(false)
 /** Finger positions in window coordinates, so a page that moves under the finger doesn't distort the drag. */
@@ -191,15 +195,30 @@ internal fun openApp(ctx: Context, app: App) {
         .setComponent(app.component)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
     val v = launchView
+    // The app opens out of the name you tapped (or the spot you touched, for rows we have no bounds for).
+    val b = tappedTextBounds
+    tappedTextBounds = null
+    val left = (b?.left ?: (lastTouch.x - 80f)).toInt()
+    val top = (b?.top ?: (lastTouch.y - 24f)).toInt()
+    val width = (b?.width ?: 160f).toInt().coerceAtLeast(1)
+    val height = (b?.height ?: 48f).toInt().coerceAtLeast(1)
     val options = if (!animationsOn) {
         android.app.ActivityOptions.makeCustomAnimation(ctx, 0, 0).toBundle()
-    } else {
-        // Our own enter/exit animation: the app scales up and fades in while Home eases back. A custom
-        // animation is honoured by the system, whereas reveal/scale-up options are ignored for third-party launchers.
-        android.app.ActivityOptions.makeCustomAnimation(ctx, R.anim.app_open_enter, R.anim.app_open_exit).toBundle()
-    }
+    } else if (v != null) {
+        android.app.ActivityOptions.makeScaleUpAnimation(v, left, top, width, height).toBundle()
+    } else null
     launching = true
-    try { ctx.startActivity(intent, options) } catch (_: Exception) { launching = false }
+    try {
+        // Starting through LauncherApps is how a home app launches an app, and it hands the system the
+        // source rectangle, so the system draws its launch animation from there instead of sliding in from the side.
+        val la = ctx.getSystemService(android.content.pm.LauncherApps::class.java)
+        val loc = IntArray(2)
+        v?.getLocationOnScreen(loc)
+        val src = android.graphics.Rect(left + loc[0], top + loc[1], left + loc[0] + width, top + loc[1] + height)
+        la.startMainActivity(app.component, android.os.Process.myUserHandle(), src, options)
+    } catch (_: Exception) {
+        try { ctx.startActivity(intent, options) } catch (_: Exception) { launching = false }
+    }
 }
 
 internal fun openUri(ctx: Context, uri: Uri, mime: String? = null) {
@@ -428,7 +447,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
         else Toast.makeText(ctx, "Pick a ${slot.label.lowercase()} app in Settings", Toast.LENGTH_SHORT).show()
     }
 
-    CompositionLocalProvider(LocalFont provides cfg.font.family) {
+    CompositionLocalProvider(LocalFont provides cfg.fontFamily()) {
         val view = LocalView.current
         SideEffect { launchView = view }
         // Android lets an app claim at most ~200dp of each screen edge from the system back gesture.

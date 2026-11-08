@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -608,8 +609,30 @@ internal fun SettingsScreen(
                         SettingsPage.LOOK -> {
                             settingsBlock {
                                 SettingsGroup(p, "Font") {
-                                    AppFont.entries.forEach { f -> OptionRow(f.label, f == cfg.font, p, family = f.family) { onConfig(cfg.copy(font = f)) } }
+                                    val fc = LocalContext.current
+                                    val fontPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                                        if (uri != null) {
+                                            val name = CustomFont.import(fc, uri)
+                                            if (name != null) {
+                                                onConfig(cfg.copy(font = AppFont.CUSTOM, customFontName = name, customFontStamp = System.currentTimeMillis()))
+                                            } else {
+                                                Toast.makeText(fc, "That doesn't look like a font file (.ttf or .otf)", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }
+                                    AppFont.entries.filter { it != AppFont.CUSTOM }.forEach { f ->
+                                        OptionRow(f.label, f == cfg.font, p, family = f.family) { onConfig(cfg.copy(font = f)) }
+                                    }
+                                    if (cfg.customFontName.isNotEmpty()) {
+                                        OptionRow(cfg.customFontName, cfg.font == AppFont.CUSTOM, p, family = CustomFont.family) {
+                                            onConfig(cfg.copy(font = AppFont.CUSTOM))
+                                        }
+                                    }
+                                    ActionRow(if (cfg.customFontName.isEmpty()) "Add your own font file" else "Replace custom font", p) {
+                                        fontPicker.launch(arrayOf("*/*"))
+                                    }
                                 }
+                                Caption(p, "Pick a .ttf or .otf file. It is copied into the app, so you can delete the original.")
                             }
                             settingsBlock {
                                 SettingsGroup(p, "Wallpaper") {

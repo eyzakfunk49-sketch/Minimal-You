@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -423,11 +424,17 @@ internal fun AppRow(
     // Home keeps the tap target on the name only; lists (drawer, search, pickers) use the whole row.
     fullWidth: Boolean = false,
 ) {
+    var textCoords by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
+    val click = {
+        // Remember where this name is, so the opening app can grow out of it.
+        textCoords?.takeIf { it.isAttached }?.let { tappedTextBounds = it.boundsInRoot() }
+        onClick()
+    }
     Row(
         modifier
             .then(if (fullWidth) Modifier.fillMaxWidth() else Modifier)
             .heightIn(min = if (fullWidth) 56.dp else 48.dp)
-            .softCombined(onClick = onClick, onLongClick = onLongClick),
+            .softCombined(onClick = click, onLongClick = onLongClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BasicText(
@@ -435,7 +442,7 @@ internal fun AppRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = ts(color, size, weight),
-            modifier = Modifier.weight(1f, fill = false),
+            modifier = Modifier.weight(1f, fill = false).onGloballyPositioned { textCoords = it },
         )
         if (marker != null) {
             Spacer(Modifier.width(12.dp))

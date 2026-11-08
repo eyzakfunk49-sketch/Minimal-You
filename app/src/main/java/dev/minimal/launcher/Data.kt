@@ -74,7 +74,47 @@ enum class AppFont(val label: String, val family: FontFamily) {
     SERIF("Serif", FontFamily.Serif),
     MONO("Monospace", FontFamily.Monospace),
     CASUAL("Casual", FontFamily(Typeface.create("casual", Typeface.NORMAL))),
+    /** A font file the user added; the real family comes from [CustomFont]. */
+    CUSTOM("Custom", FontFamily.Default),
 }
+
+/** A .ttf/.otf the user picked, copied into the app's own storage so it keeps working. */
+object CustomFont {
+    var family: FontFamily? = null
+
+    private fun file(ctx: Context) = java.io.File(ctx.filesDir, "custom_font")
+
+    fun load(ctx: Context) {
+        val f = file(ctx)
+        family = if (f.exists()) {
+            try { FontFamily(Typeface.createFromFile(f)) } catch (_: Exception) { null }
+        } else null
+    }
+
+    /** Copies the picked file in. Returns its display name, or null if it isn't a usable font. */
+    fun import(ctx: Context, uri: Uri): String? {
+        return try {
+            val tmp = java.io.File(ctx.filesDir, "custom_font.tmp")
+            ctx.contentResolver.openInputStream(uri)?.use { input -> tmp.outputStream().use { input.copyTo(it) } } ?: return null
+            // Throws if this isn't a real font, so a bad file never replaces a good one.
+            android.graphics.fonts.Font.Builder(tmp).build()
+            val dest = file(ctx)
+            dest.delete()
+            if (!tmp.renameTo(dest)) return null
+            load(ctx)
+            var name: String? = null
+            ctx.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                if (it.moveToFirst()) name = it.getString(0)
+            }
+            (name ?: "Custom font").substringBeforeLast('.')
+        } catch (_: Exception) {
+            null
+        }
+    }
+}
+
+fun Config.fontFamily(): FontFamily =
+    if (font == AppFont.CUSTOM) CustomFont.family ?: FontFamily.SansSerif else font.family
 
 enum class ClockStyle(val label: String) {
     LARGE("Large"), BOLD("Bold"), COMPACT("Compact"), STACKED("Stacked"),
@@ -133,6 +173,8 @@ data class Config(
     val showBattery: Boolean = true,
     val showClock: Boolean = true,
     val homeAlign: HomeAlign = HomeAlign.LEFT,
+    val customFontName: String = "",
+    val customFontStamp: Long = 0L,
     val centerApps: Boolean = false,
     val animations: Boolean = true,
     val drawerRight: Boolean = false,
@@ -151,6 +193,7 @@ private inline fun <reified E : Enum<E>> SharedPreferences.readEnum(key: String,
 
 fun loadConfig(ctx: Context): Config {
     val p = appPrefs(ctx)
+    if (CustomFont.family == null) CustomFont.load(ctx)
     return Config(
         font = p.readEnum("font", AppFont.SANS),
         clock = p.readEnum("clock", ClockStyle.LARGE),
@@ -177,6 +220,8 @@ fun loadConfig(ctx: Context): Config {
         showBattery = p.getBoolean("showBattery", true),
         showClock = p.getBoolean("showClock", true),
         homeAlign = p.readEnum("homeAlign", HomeAlign.LEFT),
+        customFontName = p.getString("customFontName", "") ?: "",
+        customFontStamp = p.getLong("customFontStamp", 0L),
         centerApps = p.getBoolean("centerApps", false),
         animations = p.getBoolean("animations", true),
         drawerRight = p.getBoolean("drawerRight", false),
@@ -213,6 +258,8 @@ fun saveConfig(ctx: Context, c: Config) {
         .putBoolean("showBattery", c.showBattery)
         .putBoolean("showClock", c.showClock)
         .putString("homeAlign", c.homeAlign.name)
+        .putString("customFontName", c.customFontName)
+        .putLong("customFontStamp", c.customFontStamp)
         .putBoolean("centerApps", c.centerApps)
         .putBoolean("animations", c.animations)
         .putBoolean("drawerRight", c.drawerRight)
