@@ -189,8 +189,12 @@ private fun openApp(ctx: Context, app: App) {
     val options = if (!animationsOn) {
         android.app.ActivityOptions.makeCustomAnimation(ctx, 0, 0).toBundle()
     } else if (v != null) {
-        android.app.ActivityOptions.makeScaleUpAnimation(
-            v, lastTouch.x.toInt() - 48, lastTouch.y.toInt() - 48, 96, 96,
+        // The new app grows out of the row you tapped (rounded reveal) instead of popping in from a dot.
+        val w = (v.width * 0.5f).toInt().coerceAtLeast(240)
+        val h = 120
+        android.app.ActivityOptions.makeClipRevealAnimation(
+            v, (lastTouch.x - w / 2f).toInt().coerceIn(0, (v.width - w).coerceAtLeast(0)),
+            (lastTouch.y - h / 2f).toInt().coerceIn(0, (v.height - h).coerceAtLeast(0)), w, h,
         ).toBundle()
     } else null
     launching = true
@@ -440,17 +444,24 @@ fun LauncherApp(homePress: Int, resumes: Int) {
         LaunchedEffect(resumes) { launching = false }
         LaunchedEffect(launching) { if (launching) { delay(2500); launching = false } }
         val zoom by animateFloatAsState(
-            if (launching) 0.9f else 1f,
-            tw(if (launching) 230 else 300, easing = EmphasizedDecel), label = "zoom",
+            if (launching) 0.94f else 1f,
+            tw(if (launching) 320 else 380, easing = EmphasizedDecel), label = "zoom",
         )
         val fade by animateFloatAsState(
-            if (launching) 0f else 1f,
-            tw(if (launching) 180 else 240, easing = EmphasizedDecel), label = "fade",
+            // Stays mostly visible so there is never a dark gap while the app window is still starting.
+            if (launching) 0.45f else 1f,
+            tw(if (launching) 300 else 320, easing = EmphasizedDecel), label = "fade",
         )
         Box(
             Modifier
                 .fillMaxSize()
-                .graphicsLayer { scaleX = zoom; scaleY = zoom; alpha = fade }
+                .graphicsLayer {
+                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(
+                        (lastTouch.x / size.width.coerceAtLeast(1f)).coerceIn(0f, 1f),
+                        (lastTouch.y / size.height.coerceAtLeast(1f)).coerceIn(0f, 1f),
+                    )
+                    scaleX = zoom; scaleY = zoom; alpha = fade
+                }
                 .background(p.bg)
                 .pointerInput(Unit) {
                     awaitEachGesture {
