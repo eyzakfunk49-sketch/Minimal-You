@@ -369,7 +369,7 @@ fun formatEvent(e: Event, is24: Boolean): String {
         today.plusDays(1) -> "Tomorrow "
         else -> start.format(DateTimeFormatter.ofPattern("EEE "))
     }
-    val timePart = if (e.allDay) "All day" else start.format(DateTimeFormatter.ofPattern(if (is24) "H:mm" else "h:mm a"))
+    val timePart = if (e.allDay) "All Day" else start.format(DateTimeFormatter.ofPattern(if (is24) "H:mm" else "h:mm a"))
     return "${e.title} · $dayPart$timePart"
 }
 
