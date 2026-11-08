@@ -80,6 +80,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.NotificationManagerCompat
@@ -89,6 +91,12 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.selection.toggleable
@@ -134,7 +142,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private const val MAX_FAVORITES = 6
+/** Home fits 7 favorites, or 9 when the clock is hidden and frees up the space. */
+private fun maxFavorites(cfg: Config) = if (cfg.showClock) 7 else 9
 
 class MainActivity : ComponentActivity() {
     // Bumped whenever Home is pressed while we're already open, so overlays can close.
@@ -164,6 +173,15 @@ class MainActivity : ComponentActivity() {
 private var launchView: android.view.View? = null
 private var lastTouch = Offset.Zero
 private var launching by mutableStateOf(false)
+/** Finger positions in window coordinates, so a page that moves under the finger doesn't distort the drag. */
+private class RootTracker {
+    var coords: androidx.compose.ui.layout.LayoutCoordinates? = null
+    fun toRoot(p: androidx.compose.ui.geometry.Offset): androidx.compose.ui.geometry.Offset {
+        val c = coords
+        return if (c != null && c.isAttached) c.localToRoot(p) else p
+    }
+}
+
 private var moveEdgeExclusion: (Float) -> Unit = {}
 
 private fun openApp(ctx: Context, app: App) {
@@ -174,11 +192,11 @@ private fun openApp(ctx: Context, app: App) {
     val v = launchView
     val options = if (!animationsOn) {
         android.app.ActivityOptions.makeCustomAnimation(ctx, 0, 0).toBundle()
-    } else if (v != null) {
-        android.app.ActivityOptions.makeScaleUpAnimation(
-            v, lastTouch.x.toInt() - 48, lastTouch.y.toInt() - 48, 96, 96,
-        ).toBundle()
-    } else null
+    } else {
+        // Our own enter/exit animation: the app scales up and fades in while Home eases back. A custom
+        // animation is honoured by the system, whereas reveal/scale-up options are ignored for third-party launchers.
+        android.app.ActivityOptions.makeCustomAnimation(ctx, R.anim.app_open_enter, R.anim.app_open_exit).toBundle()
+    }
     launching = true
     try { ctx.startActivity(intent, options) } catch (_: Exception) { launching = false }
 }
@@ -286,8 +304,23 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     // 0 = Home, 1 = app list fully pulled up. Follows the finger while dragging, then settles.
     val drawerP = remember { Animatable(0f) }
     val pageScope = rememberCoroutineScope()
-    val drawerSpec = sp(0.9f, 650f)
+    val drawerSpec = sp(1f, 650f)
     LaunchedEffect(drawerOpen) { drawerP.animateTo(if (drawerOpen) 1f else 0f, drawerSpec) }
+    // The search page rises from the bottom exactly like the app list: it follows the finger, then settles.
+    val searchP = remember { Animatable(0f) }
+    LaunchedEffect(searchOpen) { searchP.animateTo(if (searchOpen) 1f else 0f, drawerSpec) }
+    val settingsP = remember { Animatable(0f) }
+    LaunchedEffect(settingsOpen) { settingsP.animateTo(if (settingsOpen) 1f else 0f, drawerSpec) }
+    val settingsVisible by remember { derivedStateOf { settingsP.value > 0.001f } }
+    // The Home search bar glides up into the search page's bar instead of a new one appearing.
+    var homePillY by remember { mutableStateOf(-1f) }
+    val density = LocalDensity.current
+    val searchPillTop = with(density) {
+        WindowInsets.systemBars.union(WindowInsets.displayCutout).getTop(density) + 24.dp.toPx()
+    }
+    val pillFlying by remember { derivedStateOf { searchP.value > 0.001f && searchP.value < 0.985f } }
+    val pillSettled by remember { derivedStateOf { searchP.value >= 0.985f } }
+    val searchVisible by remember { derivedStateOf { searchP.value > 0.001f } }
     val widgetsP = remember { Animatable(0f) }
     LaunchedEffect(widgetsOpen) { widgetsP.animateTo(if (widgetsOpen) 1f else 0f, drawerSpec) }
     val widgetsVisible by remember { derivedStateOf { widgetsP.value > 0.001f } }
@@ -295,9 +328,10 @@ fun LauncherApp(homePress: Int, resumes: Int) {
 
     animationsOn = cfg.animations
     val buzzView = LocalView.current
-    val buzz: () -> Unit = {
-        if (!cfg.noHaptics) buzzView.performHapticFeedback(android.view.HapticFeedbackConstants.GESTURE_START)
+    val buzzWith: (Int) -> Unit = { kind ->
+        if (!cfg.noHaptics) buzzView.performHapticFeedback(kind)
     }
+    val buzz: () -> Unit = { buzzWith(android.view.HapticFeedbackConstants.GESTURE_START) }
     val visibleApps = remember(apps, cfg.hidden) { apps.filter { it.key !in cfg.hidden } }
     var hiddenOpen by remember { mutableStateOf(false) }
 
@@ -376,8 +410,8 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     val togglePin: (App) -> Unit = { app ->
         val current = favorites.map { it.key }
         val pinned = app.key in current
-        if (!pinned && current.size >= MAX_FAVORITES) {
-            Toast.makeText(ctx, "Home fits $MAX_FAVORITES favorites. Remove one in Settings.", Toast.LENGTH_SHORT).show()
+        if (!pinned && current.size >= maxFavorites(cfg)) {
+            Toast.makeText(ctx, "Home fits ${maxFavorites(cfg)} favorites. Remove one in Settings.", Toast.LENGTH_SHORT).show()
         } else {
             setFavs(if (pinned) current - app.key else current + app.key)
             Toast.makeText(ctx, if (pinned) "Removed from Home" else "Added to Home", Toast.LENGTH_SHORT).show()
@@ -398,10 +432,14 @@ fun LauncherApp(homePress: Int, resumes: Int) {
         // Keep that strip where your thumb last touched, so edge swipes reach the launcher instead of "back".
         val edgePx = with(LocalDensity.current) { 48.dp.roundToPx() }
         val halfPx = with(LocalDensity.current) { 100.dp.roundToPx() }
+        // Only on Home: inside menus the system back gesture has to work, so give the edges back.
+        val exclusionOn = !settingsOpen && !searchOpen && !drawerOpen && !widgetsOpen && pickSlot == null && !hiddenOpen
         moveEdgeExclusion = { y ->
             val w = view.width
             val h = view.height
-            if (w > 0 && h > 0) {
+            if (!exclusionOn) {
+                view.systemGestureExclusionRects = emptyList()
+            } else if (w > 0 && h > 0) {
                 val top = (y.toInt() - halfPx).coerceIn(0, (h - 2 * halfPx).coerceAtLeast(0))
                 view.systemGestureExclusionRects = listOf(
                     android.graphics.Rect(0, top, edgePx, top + 2 * halfPx),
@@ -413,20 +451,28 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             view.post { moveEdgeExclusion(view.height * 0.65f) }
             onDispose { view.systemGestureExclusionRects = emptyList() }
         }
+        LaunchedEffect(exclusionOn) { moveEdgeExclusion(if (lastTouch.y > 0f) lastTouch.y else view.height * 0.65f) }
         LaunchedEffect(resumes) { launching = false }
         LaunchedEffect(launching) { if (launching) { delay(2500); launching = false } }
         val zoom by animateFloatAsState(
-            if (launching) 0.9f else 1f,
-            tw(if (launching) 230 else 300, easing = EmphasizedDecel), label = "zoom",
+            if (launching) 0.94f else 1f,
+            tw(if (launching) 320 else 380, easing = EmphasizedDecel), label = "zoom",
         )
         val fade by animateFloatAsState(
-            if (launching) 0f else 1f,
-            tw(if (launching) 180 else 240, easing = EmphasizedDecel), label = "fade",
+            // Stays mostly visible so there is never a dark gap while the app window is still starting.
+            if (launching) 0.45f else 1f,
+            tw(if (launching) 300 else 320, easing = EmphasizedDecel), label = "fade",
         )
         Box(
             Modifier
                 .fillMaxSize()
-                .graphicsLayer { scaleX = zoom; scaleY = zoom; alpha = fade }
+                .graphicsLayer {
+                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(
+                        (lastTouch.x / size.width.coerceAtLeast(1f)).coerceIn(0f, 1f),
+                        (lastTouch.y / size.height.coerceAtLeast(1f)).coerceIn(0f, 1f),
+                    )
+                    scaleX = zoom; scaleY = zoom; alpha = fade
+                }
                 .background(p.bg)
                 .pointerInput(Unit) {
                     awaitEachGesture {
@@ -438,8 +484,8 @@ fun LauncherApp(homePress: Int, resumes: Int) {
         ) {
             Box(Modifier.fillMaxSize().graphicsLayer {
                 translationX = widgetsP.value * size.width * 0.22f - (if (cfg.drawerRight) drawerP.value * size.width * 0.22f else 0f)
-                translationY = if (cfg.drawerRight) 0f else -drawerP.value * size.height * 0.22f
-                alpha = (1f - drawerP.value - widgetsP.value).coerceIn(0f, 1f)
+                translationY = -((if (cfg.drawerRight) 0f else drawerP.value) + searchP.value) * size.height * 0.22f
+                alpha = (1f - drawerP.value - widgetsP.value - searchP.value - settingsP.value).coerceIn(0f, 1f)
             }) {
             Home(
                 p, cfg, favorites, weather, event,
@@ -450,9 +496,22 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     drawerOpen = open
                     pageScope.launch { drawerP.animateTo(if (open) 1f else 0f, drawerSpec, initialVelocity = 0f) }
                 },
-                drawerProgress = { drawerP.value },
+                drawerProgress = { maxOf(drawerP.value, searchP.value) },
+                searchProgress = { searchP.value },
+                onPillPos = { y ->
+                    if (searchP.value < 0.001f && drawerP.value < 0.001f && widgetsP.value < 0.001f && settingsP.value < 0.001f) homePillY = y
+                },
                 onOpenSearch = { searchOpen = true },
-                onSettings = { settingsOpen = true },
+                onSearchDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { searchP.snapTo(f.coerceIn(0f, 1f)) } },
+                onSearchEnd = { velocity ->
+                    val open = if (velocity < -150f) true else if (velocity > 150f) false else searchP.value > 0.1f
+                    searchOpen = open
+                    pageScope.launch { searchP.animateTo(if (open) 1f else 0f, drawerSpec) }
+                },
+                onSettings = {
+                    buzzWith(android.view.HapticFeedbackConstants.LONG_PRESS)
+                    settingsOpen = true
+                },
                 onSleep = { globalAction(ctx, AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN) },
                 onNotifications = { globalAction(ctx, AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS) },
                 gesturesEnabled = !drawerOpen && !settingsOpen && !searchOpen && !widgetsOpen,
@@ -510,23 +569,47 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     )
                 }
             }
-            AnimatedVisibility(
-                visible = searchOpen,
-                enter = screenEnter(),
-                exit = screenExit(),
-            ) {
-                SearchScreen(p, cfg, visibleApps, onClose = { searchOpen = false })
+            if (searchVisible) {
+                Box(Modifier.fillMaxSize().graphicsLayer {
+                    translationY = (1f - searchP.value) * size.height
+                    alpha = (searchP.value * 1.6f).coerceIn(0f, 1f)
+                }) {
+                    SearchScreen(
+                        p, cfg, visibleApps,
+                        active = searchOpen,
+                        pillShown = pillSettled,
+                        onClose = { searchOpen = false },
+                        onDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { searchP.snapTo(f.coerceIn(0f, 1f)) } },
+                        onEnd = { v ->
+                            // v is toward-closed positive (down)
+                            val open = if (v > 150f) false else if (v < -150f) true else searchP.value > 0.9f
+                            searchOpen = open
+                            pageScope.launch { searchP.animateTo(if (open) 1f else 0f, drawerSpec) }
+                        },
+                    )
+                }
             }
-            AnimatedVisibility(
-                visible = settingsOpen,
-                enter = screenEnter(),
-                exit = screenExit(),
-            ) {
+            if (pillFlying && homePillY >= 0f) {
+                Box(Modifier.fillMaxSize().padding(horizontal = 32.dp)) {
+                    Pill(p, Modifier.graphicsLayer {
+                        translationY = homePillY + (searchPillTop - homePillY) * searchP.value
+                    }) {
+                        SearchIcon(p.accent)
+                        Spacer(Modifier.width(12.dp))
+                        BasicText("Search anything", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                    }
+                }
+            }
+            if (settingsVisible) Box(Modifier.fillMaxSize().graphicsLayer {
+                translationY = (1f - settingsP.value) * size.height * 0.05f
+                alpha = (settingsP.value * 1.6f).coerceIn(0f, 1f)
+            }) {
                 SettingsScreen(
                     p, cfg, updateCfg,
                     favorites = favorites, apps = apps, onSetFavs = setFavs,
                     onPickSlot = { pickSlot = it },
                     onOpenHidden = { hiddenOpen = true },
+                    coveredByScreen = hiddenOpen || pickSlot != null,
                     onBack = { settingsOpen = false },
                 )
             }
@@ -584,7 +667,7 @@ private fun ClockText(p: Palette, style: ClockStyle, now: LocalDateTime, is24: B
         ClockStyle.BOLD -> BasicText(hm, style = ts(p.ink, 96.sp, FontWeight.Bold, (-4).sp, 104.sp))
         ClockStyle.COMPACT -> BasicText(hm, style = ts(p.ink, 48.sp, FontWeight.Normal, (-1).sp, 56.sp))
         ClockStyle.STACKED -> Column {
-            BasicText(f(if (is24) "HH" else "h"), style = ts(p.ink, 88.sp, FontWeight.Light, (-2).sp, 84.sp))
+            BasicText(f(if (is24) "HH" else "hh"), style = ts(p.ink, 88.sp, FontWeight.Light, (-2).sp, 84.sp))
             BasicText(f("mm"), style = ts(p.accent, 88.sp, FontWeight.Light, (-2).sp, 84.sp))
         }
     }
@@ -640,6 +723,10 @@ private fun Home(
     onDrawerEnd: (Float) -> Unit,
     drawerProgress: () -> Float,
     onOpenSearch: () -> Unit,
+    onSearchDrag: (Float) -> Unit,
+    onSearchEnd: (Float) -> Unit,
+    searchProgress: () -> Float,
+    onPillPos: (Float) -> Unit,
     onSettings: () -> Unit,
     onSleep: () -> Unit,
     onNotifications: () -> Unit,
@@ -661,8 +748,10 @@ private fun Home(
     val curDrawer by rememberUpdatedState(onOpenDrawer)
     val curWDrag by rememberUpdatedState(onWidgetsDrag)
     val curWEnd by rememberUpdatedState(onWidgetsEnd)
-    val curSearch by rememberUpdatedState(onOpenSearch)
+    val curSDrag by rememberUpdatedState(onSearchDrag)
+    val curSEnd by rememberUpdatedState(onSearchEnd)
     val curBuzz by rememberUpdatedState(onBuzz)
+    val rt = remember { RootTracker() }
     val curDrag by rememberUpdatedState(onDrawerDrag)
     val curEnd by rememberUpdatedState(onDrawerEnd)
     val curNotifications by rememberUpdatedState(onNotifications)
@@ -673,6 +762,7 @@ private fun Home(
     Column(
         Modifier
             .fillMaxSize()
+            .onGloballyPositioned { rt.coords = it }
             // Blank space: double tap = sleep, long press = settings.
             .pointerInput(gesturesEnabled) {
                 if (gesturesEnabled) {
@@ -688,25 +778,27 @@ private fun Home(
                     val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     val startTime = first.uptimeMillis
                     val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
-                    tracker.addPosition(first.uptimeMillis, first.position)
+                    val r0 = rt.toRoot(first.position)
+                    tracker.addPosition(first.uptimeMillis, r0)
                     var dx = 0f
                     var dy = 0f
                     var held = false
                     val slop = 3.dp.toPx()
-                    var axis = 0 // 0 = undecided, 1 = pulling the app list up, 2 = pulling the widgets page in
+                    var axis = 0 // 0 = undecided, 1 = pulling the app list, 2 = pulling the widgets page in, 3 = pulling search up
                     var swallow = false
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
                         val change = event.changes.firstOrNull { it.id == first.id } ?: break
                         if (!change.pressed) break
-                        tracker.addPosition(change.uptimeMillis, change.position)
-                        val delta = change.positionChange()
-                        dx += delta.x
-                        dy += delta.y
+                        val r = rt.toRoot(change.position)
+                        tracker.addPosition(change.uptimeMillis, r)
+                        dx = r.x - r0.x
+                        dy = r.y - r0.y
                         if (axis != 0 || swallow) {
                             change.consume() // the rest of this gesture belongs to the swipe, not the app under it
                             if (axis == 1) curDrag(if (cfg.drawerRight) -dx / size.width.toFloat() else -dy / size.height.toFloat())
                             if (axis == 2) curWDrag(dx / size.width.toFloat())
+                            if (axis == 3) curSDrag(-dy / size.height.toFloat())
                             continue
                         }
                         // A press-and-hold is a long press (Settings), not a swipe.
@@ -717,11 +809,11 @@ private fun Home(
                             change.consume()
                             curBuzz()
                             curDrag(-dy / size.height.toFloat())
-                        } else if (cfg.drawerRight && cfg.swipeUpSearch && -dy > slop * 2f && -dy > 1.2f * abs(dx)) {
+                        } else if (cfg.drawerRight && cfg.swipeUpSearch && -dy > slop && -dy > 0.9f * abs(dx)) {
+                            axis = 3
                             change.consume()
                             curBuzz()
-                            curSearch()
-                            swallow = true
+                            curSDrag(-dy / size.height.toFloat())
                         } else if (cfg.drawerRight && -dx > slop && -dx > 0.7f * abs(dy)) {
                             axis = 1
                             change.consume()
@@ -741,6 +833,7 @@ private fun Home(
                     }
                     if (axis == 1) curEnd(if (cfg.drawerRight) tracker.calculateVelocity().x else tracker.calculateVelocity().y)
                     if (axis == 2) curWEnd(tracker.calculateVelocity().x)
+                    if (axis == 3) curSEnd(tracker.calculateVelocity().y)
                 }
             }
             .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
@@ -759,8 +852,10 @@ private fun Home(
                         .wrapContentHeight(Alignment.CenterVertically),
                 )
             }
-            Box(Modifier.softClick(role = Role.Button) { onSlot(Slot.CLOCK) }) {
-                ClockText(p, cfg.clock, now, is24)
+            if (cfg.showClock) {
+                Box(Modifier.softClick(role = Role.Button) { onSlot(Slot.CLOCK) }) {
+                    ClockText(p, cfg.clock, now, is24)
+                }
             }
             if (weather != null || showBatteryLine) {
                 Row(
@@ -785,7 +880,7 @@ private fun Home(
                         }
                         val low = status.battery <= 15 && !status.charging
                         val fill = if (status.charging) p.accent else if (low) Color(0xFFE57373) else p.ink
-                        BatteryIcon(status.battery, p.muted, fill)
+                        BatteryIcon(status.battery, p.muted, fill, status.charging, p.ink, p.bg)
                         Spacer(Modifier.width(6.dp))
                         BasicText("${status.battery}%", style = ts(p.muted, 15.sp, FontWeight.Normal))
                     }
@@ -805,14 +900,23 @@ private fun Home(
             }
         }
         Spacer(Modifier.weight(1f))
-        favorites.forEach {
+        favorites.take(maxFavorites(cfg)).forEach {
             AppRow(
                 it, 30.sp, p.ink, onClick = { onLaunch(it) }, weight = FontWeight.Normal,
                 marker = if (cfg.notifDots && it.component.packageName in NotifState.active) p.accent else null,
             )
         }
         Spacer(Modifier.height(32.dp))
-        Pill(p, Modifier.graphicsLayer { alpha = (1f - drawerProgress() * 4f).coerceIn(0f, 1f) }.softClick(role = Role.Button, onClick = onOpenSearch)) {
+        Pill(
+            p,
+            Modifier
+                .onGloballyPositioned { onPillPos(it.positionInRoot().y) }
+                .graphicsLayer {
+                    // Hidden the moment the flying copy takes over during the search transition.
+                    alpha = if (searchProgress() > 0.001f) 0f else (1f - drawerProgress() * 4f).coerceIn(0f, 1f)
+                }
+                .softClick(role = Role.Button, onClick = onOpenSearch),
+        ) {
             SearchIcon(p.accent)
             Spacer(Modifier.width(12.dp))
             BasicText("Search anything", style = ts(p.muted, 16.sp, FontWeight.Normal))
@@ -839,6 +943,7 @@ private fun Drawer(
     onEnd: (Float) -> Unit,
 ) {
     val curDragDrawer by rememberUpdatedState(onDrag)
+    val rt = remember { RootTracker() }
     val curEndDrawer by rememberUpdatedState(onEnd)
     val asApps by remember { derivedStateOf { progress() > 0.55f } }
     var query by remember { mutableStateOf("") }
@@ -852,9 +957,22 @@ private fun Drawer(
         }.toSortedMap()
     }
     val listState = rememberLazyListState()
-    LaunchedEffect(active) { if (!active) { query = ""; listState.scrollToItem(0) } }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    // Put the keyboard away whenever the panel is leaving, so it never stays up over Home.
+    LaunchedEffect(active) {
+        if (!active) {
+            keyboard?.hide()
+            focusManager.clearFocus()
+            query = ""
+            listState.scrollToItem(0)
+        }
+    }
     val haptic = LocalHapticFeedback.current
     var activeLetter by remember { mutableStateOf<Char?>(null) }
+    // The last letter picked on the strip, kept while the dimming fades back out.
+    var litLetter by remember { mutableStateOf<Char?>(null) }
+    val focus = animateFloatAsState(if (activeLetter != null) 1f else 0f, tw(160), label = "letterFocus")
     val letters = remember(groups) { groups.keys.toList() }
     val headerIndex = remember(groups) {
         val map = mutableMapOf<Char, Int>()
@@ -867,6 +985,7 @@ private fun Drawer(
         Modifier
             .fillMaxSize()
             .background(p.bg)
+            .onGloballyPositioned { rt.coords = it }
             // Drag the page back the way it came (down, or right when it comes from the right). It follows
             // the finger. Starts only when the list is at its top (bottom mode), so scrolling is unaffected.
             .pointerInput(listState, letters.size, fromRight) {
@@ -877,7 +996,8 @@ private fun Drawer(
                     val startedAtTop = !listState.canScrollBackward
                     val inStrip = letters.size > 1 && first.position.x > size.width - stripPx
                     val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
-                    tracker.addPosition(first.uptimeMillis, first.position)
+                    val r0 = rt.toRoot(first.position)
+                    tracker.addPosition(first.uptimeMillis, r0)
                     var dx = 0f
                     var dy = 0f
                     var pulling = false
@@ -885,13 +1005,14 @@ private fun Drawer(
                         val event = awaitPointerEvent(PointerEventPass.Initial)
                         val change = event.changes.firstOrNull { it.id == first.id } ?: break
                         if (!change.pressed) break
-                        tracker.addPosition(change.uptimeMillis, change.position)
-                        val delta = change.positionChange()
-                        dx += delta.x
-                        dy += delta.y
+                        val r = rt.toRoot(change.position)
+                        tracker.addPosition(change.uptimeMillis, r)
+                        dx = r.x - r0.x
+                        dy = r.y - r0.y
                         if (!pulling && !inStrip) {
                             pulling = if (fromRight) dx > slop && dx > 0.8f * abs(dy)
                             else startedAtTop && dy > slop && dy > 0.9f * abs(dx)
+                            if (pulling) { keyboard?.hide(); focusManager.clearFocus() }
                         }
                         if (pulling) {
                             change.consume()
@@ -909,36 +1030,21 @@ private fun Drawer(
             .padding(horizontal = 32.dp),
     ) {
         Spacer(Modifier.height(24.dp))
-        Pill(p) {
-            SearchIcon(p.accent)
-            Spacer(Modifier.width(12.dp))
-            BasicTextField(
-                value = query,
-                onValueChange = { query = it },
-                singleLine = true,
-                textStyle = ts(p.ink, 16.sp, FontWeight.Normal),
-                cursorBrush = SolidColor(p.accent),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { shown.firstOrNull()?.let(onLaunch) }),
-                modifier = Modifier.weight(1f),
-                decorationBox = { inner ->
-                    Box(contentAlignment = Alignment.CenterStart) {
-                        if (query.isEmpty()) BasicText(if (asApps) "Search apps" else "Search anything", style = ts(p.muted, 16.sp, FontWeight.Normal))
-                        inner()
-                    }
-                },
-            )
-        }
-        Spacer(Modifier.height(8.dp))
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 Modifier.fillMaxSize(),
                 state = listState,
-                contentPadding = PaddingValues(end = 28.dp, bottom = 24.dp),
+                contentPadding = PaddingValues(end = 28.dp, bottom = 8.dp),
             ) {
                 groups.forEach { (letter, list) ->
                     stickyHeader(key = "h$letter", contentType = "header") {
-                        Box(Modifier.fillMaxWidth().background(p.bg).padding(top = 12.dp, bottom = 4.dp)) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .background(p.bg)
+                                .padding(top = 12.dp, bottom = 4.dp)
+                                .graphicsLayer { alpha = if (litLetter == letter) 1f else 1f - 0.65f * focus.value },
+                        ) {
                             BasicText(letter.toString(), style = ts(p.accent, 13.sp, FontWeight.Medium, 1.sp))
                         }
                     }
@@ -948,8 +1054,9 @@ private fun Drawer(
                             app, 22.sp, p.ink,
                             onClick = { onLaunch(app) },
                             onLongClick = { onTogglePin(app) },
-                            weight = if (isPinned) FontWeight.Medium else FontWeight.Light,
+                            weight = if (activeLetter == letter) FontWeight.SemiBold else if (isPinned) FontWeight.Medium else FontWeight.Light,
                             marker = if (isPinned) p.accent else null,
+                            modifier = Modifier.graphicsLayer { alpha = if (litLetter == letter) 1f else 1f - 0.65f * focus.value },
                         )
                     }
                 }
@@ -971,6 +1078,7 @@ private fun Drawer(
                                         val letter = letters[(frac * letters.size).toInt()]
                                         if (letter != activeLetter) {
                                             activeLetter = letter
+                                            litLetter = letter
                                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                             headerIndex[letter]?.let { listState.requestScrollToItem(it) }
                                         }
@@ -1002,14 +1110,51 @@ private fun Drawer(
                 }
             }
         }
+        Spacer(Modifier.height(8.dp))
+        Pill(p) {
+            SearchIcon(p.accent)
+            Spacer(Modifier.width(12.dp))
+            BasicTextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                textStyle = ts(p.ink, 16.sp, FontWeight.Normal),
+                cursorBrush = SolidColor(p.accent),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { shown.firstOrNull()?.let(onLaunch) }),
+                modifier = Modifier.weight(1f),
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) BasicText(if (asApps) "Search apps" else "Search anything", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                        inner()
+                    }
+                },
+            )
+        }
+        Spacer(Modifier.height(24.dp))
     }
 }
 
 // ---------- Universal search ----------
 
 @Composable
-private fun SearchScreen(p: Palette, cfg: Config, apps: List<App>, onClose: () -> Unit) {
+private fun SearchScreen(
+    p: Palette,
+    cfg: Config,
+    apps: List<App>,
+    active: Boolean,
+    pillShown: Boolean,
+    onClose: () -> Unit,
+    onDrag: (Float) -> Unit,
+    onEnd: (Float) -> Unit,
+) {
     val ctx = LocalContext.current
+    val curDragSearch by rememberUpdatedState(onDrag)
+    val curEndSearch by rememberUpdatedState(onEnd)
+    val rt = remember { RootTracker() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val listState = rememberLazyListState()
     var query by remember { mutableStateOf("") }
     var contacts by remember { mutableStateOf(emptyList<ContactHit>()) }
     var files by remember { mutableStateOf(emptyList<FileHit>()) }
@@ -1021,7 +1166,16 @@ private fun SearchScreen(p: Palette, cfg: Config, apps: List<App>, onClose: () -
         else apps.filter { it.label.contains(q, ignoreCase = true) }.take(6)
     }
 
-    LaunchedEffect(Unit) { focus.requestFocus() }
+    // Keyboard comes up once the page has settled, and goes away as soon as it is being dismissed.
+    LaunchedEffect(active) {
+        if (active) {
+            delay(60)
+            try { focus.requestFocus() } catch (_: Exception) { }
+        } else {
+            keyboard?.hide()
+            focusManager.clearFocus()
+        }
+    }
     LaunchedEffect(q, cfg.searchContacts, cfg.searchFiles) {
         if (q.isEmpty()) {
             contacts = emptyList()
@@ -1039,21 +1193,44 @@ private fun SearchScreen(p: Palette, cfg: Config, apps: List<App>, onClose: () -
         Modifier
             .fillMaxSize()
             .background(p.bg)
+            .onGloballyPositioned { rt.coords = it }
+            // Drag the page back down. It follows the finger, and a flick closes it. Only starts when the
+            // results are scrolled to the top, so scrolling the list is unaffected.
+            .pointerInput(listState) {
+                val slop = 3.dp.toPx()
+                awaitEachGesture {
+                    val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val startedAtTop = !listState.canScrollBackward
+                    val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
+                    val r0 = rt.toRoot(first.position)
+                    tracker.addPosition(first.uptimeMillis, r0)
+                    var pulling = false
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == first.id } ?: break
+                        if (!change.pressed) break
+                        val r = rt.toRoot(change.position)
+                        tracker.addPosition(change.uptimeMillis, r)
+                        val dx = r.x - r0.x
+                        val dy = r.y - r0.y
+                        if (!pulling && startedAtTop && dy > slop && dy > 0.9f * abs(dx)) {
+                            pulling = true
+                            keyboard?.hide()
+                        }
+                        if (pulling) {
+                            change.consume()
+                            curDragSearch(1f - dy / size.height)
+                        }
+                    }
+                    if (pulling) curEndSearch(tracker.calculateVelocity().y)
+                }
+            }
             .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
             .imePadding()
-            .padding(horizontal = 32.dp)
-            .pointerInput(Unit) {
-                var total = 0f
-                detectVerticalDragGestures(
-                    onDragStart = { total = 0f },
-                    onDragEnd = { if (total > 120f) onClose() },
-                    onDragCancel = {},
-                    onVerticalDrag = { _, dy -> total += dy },
-                )
-            },
+            .padding(horizontal = 32.dp),
     ) {
         Spacer(Modifier.height(24.dp))
-        Pill(p) {
+        Pill(p, Modifier.graphicsLayer { alpha = if (pillShown) 1f else 0f }) {
             SearchIcon(p.accent)
             Spacer(Modifier.width(12.dp))
             BasicTextField(
@@ -1082,7 +1259,7 @@ private fun SearchScreen(p: Palette, cfg: Config, apps: List<App>, onClose: () -
                 },
             )
         }
-        LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 24.dp)) {
             if (q.isEmpty()) {
                 item {
                     val sources = listOfNotNull(
@@ -1150,15 +1327,20 @@ private fun SettingsScreen(
     onSetFavs: (List<String>) -> Unit,
     onPickSlot: (Slot) -> Unit,
     onOpenHidden: () -> Unit,
+    // True while a screen is open on top of Settings (hidden apps, app picker); Back then belongs to that screen.
+    coveredByScreen: Boolean,
     onBack: () -> Unit,
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val now by rememberNow()
     var adding by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var page by remember { mutableStateOf<SettingsPage?>(null) }
     var cityInput by remember { mutableStateOf(cfg.city) }
     val favKeys = favorites.map { it.key }
-    val full = favKeys.size >= MAX_FAVORITES
+    val maxFavs = maxFavorites(cfg)
+    val full = favKeys.size >= maxFavs
     val addable = remember(apps, favKeys) { apps.filter { it.key !in favKeys } }
 
     fun has(permission: String) = ctx.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
@@ -1202,335 +1384,501 @@ private fun SettingsScreen(
         }
     }
 
+    BackHandler(enabled = page != null && !coveredByScreen) { page = null }
+
     Column(
         Modifier
             .fillMaxSize()
             .background(p.bg)
             .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
-            .padding(horizontal = 32.dp),
+            .imePadding()
+            .padding(horizontal = 24.dp),
     ) {
-        BasicText(
-            "Back",
-            style = ts(p.accent, 15.sp, FontWeight.Medium),
-            modifier = Modifier
-                .padding(top = 8.dp)
-                .heightIn(min = 48.dp)
-                .softClick(role = Role.Button, onClick = onBack)
-                .wrapContentHeight(Alignment.CenterVertically),
-        )
-        BasicText("Settings", style = ts(p.ink, 34.sp))
-        LazyColumn(contentPadding = PaddingValues(bottom = 32.dp)) {
-            // Clock
-            item { SectionTitle("Clock style", p) }
-            items(ClockStyle.entries) { s ->
-                OptionRow(s.label, s == cfg.clock, p) { onConfig(cfg.copy(clock = s)) }
-            }
-            item { SectionTitle("Time format", p) }
-            items(HourFormat.entries) { h ->
-                OptionRow(h.label, h == cfg.hours, p) { onConfig(cfg.copy(hours = h)) }
-            }
-            item { SectionTitle("Date format", p) }
-            items(DateStyle.entries) { d ->
-                val pattern = d.pattern
-                val label = if (pattern == null) "Hidden" else now.format(DateTimeFormatter.ofPattern(pattern))
-                OptionRow(label, d == cfg.date, p) { onConfig(cfg.copy(date = d)) }
-            }
-
-            // Weather
-            item { SectionTitle("Weather", p) }
-            item { SwitchRow("Show weather on Home", cfg.weatherOn, p) { onConfig(cfg.copy(weatherOn = it)) } }
-            item {
-                Pill(p, Modifier.padding(vertical = 4.dp).alpha(if (cfg.weatherLocation) 0.4f else 1f)) {
-                    BasicTextField(
-                        enabled = !cfg.weatherLocation,
-                        value = cityInput,
-                        onValueChange = { cityInput = it },
-                        singleLine = true,
-                        textStyle = ts(p.ink, 16.sp, FontWeight.Normal),
-                        cursorBrush = SolidColor(p.accent),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { setCity() }),
-                        modifier = Modifier.weight(1f),
-                        decorationBox = { inner ->
-                            Box(contentAlignment = Alignment.CenterStart) {
-                                if (cityInput.isEmpty()) BasicText("Your city", style = ts(p.muted, 16.sp, FontWeight.Normal))
-                                inner()
-                            }
-                        },
-                    )
+        AnimatedContent(
+            targetState = page,
+            transitionSpec = {
+                val forward = targetState != null
+                val spec = if (!animationsOn) {
+                    EnterTransition.None togetherWith ExitTransition.None
+                } else {
+                    // The old page clears out quickly, then the new one glides in: they never overlap, so nothing ghosts.
+                    (slideInHorizontally(tween(340, easing = EmphasizedDecel)) { if (forward) it / 10 else -it / 10 } +
+                        fadeIn(tween(220, delayMillis = 90, easing = LinearOutSlowInEasing))) togetherWith
+                        (slideOutHorizontally(tween(160, easing = EmphasizedAccel)) { if (forward) -it / 12 else it / 12 } +
+                            fadeOut(tween(90, easing = LinearEasing)))
+                }
+                spec.using(SizeTransform(clip = false) { _, _ -> snap() })
+            },
+            label = "settingsPage",
+        ) { target ->
+            Column(Modifier.fillMaxSize()) {
+                if (target == null) {
                     BasicText(
-                        "Set",
-                        style = ts(p.accent, 16.sp, FontWeight.Medium),
+                        "Back",
+                        style = ts(p.accent, 15.sp, FontWeight.Medium),
                         modifier = Modifier
+                            .padding(top = 8.dp, start = 8.dp)
                             .heightIn(min = 48.dp)
-                            .clickable(enabled = !cfg.weatherLocation, role = Role.Button) { setCity() }
-                            .wrapContentHeight(Alignment.CenterVertically)
-                            .padding(start = 12.dp),
+                            .softClick(role = Role.Button, onClick = onBack)
+                            .wrapContentHeight(Alignment.CenterVertically),
                     )
+                    BasicText("Settings", style = ts(p.ink, 34.sp), modifier = Modifier.padding(start = 8.dp, bottom = 8.dp))
+                } else {
+                    Row(
+                        Modifier
+                            .padding(top = 8.dp)
+                            .heightIn(min = 48.dp)
+                            .softClick(role = Role.Button) { page = null },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        SideChevron(left = true, color = p.accent)
+                        Spacer(Modifier.width(2.dp))
+                        BasicText("Settings", style = ts(p.accent, 15.sp, FontWeight.Medium))
+                    }
+                    BasicText(target.title, style = ts(p.ink, 34.sp), modifier = Modifier.padding(start = 8.dp, bottom = 8.dp))
                 }
-            }
-            if (!cfg.weatherLocation) item {
-                BasicText(
-                    if (cfg.city.isBlank()) "Type a city and tap Set. Only the city name is sent, to Open-Meteo."
-                    else "Showing weather for ${cfg.city}.",
-                    style = ts(p.muted, 14.sp, FontWeight.Normal),
-                )
-            }
-            item {
-                SwitchRow("Use my current location", cfg.weatherLocation, p) { on ->
-                    if (on && !has(Manifest.permission.ACCESS_COARSE_LOCATION)) locationPerm.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
-                    else onConfig(cfg.copy(weatherLocation = on, weatherOn = cfg.weatherOn || on))
-                }
-            }
-            if (cfg.weatherLocation) {
-                item {
-                    BasicText(
-                        "Using your approximate location. Only coordinates are sent, to Open-Meteo.",
-                        style = ts(p.muted, 14.sp, FontWeight.Normal),
-                    )
-                }
-            }
-            item { SwitchRow("Use Fahrenheit", cfg.fahrenheit, p) { onConfig(cfg.copy(fahrenheit = it)) } }
 
-            // Calendar
-            item { SectionTitle("Calendar", p) }
-            item {
-                SwitchRow("Show next event on Home", cfg.calendarOn, p) { on ->
-                    if (on && !has(Manifest.permission.READ_CALENDAR)) calendarPerm.launch(Manifest.permission.READ_CALENDAR)
-                    else onConfig(cfg.copy(calendarOn = on))
-                }
-            }
-
-            // Status bar
-            item { SectionTitle("Status bar", p) }
-            item { SwitchRow("Hide status bar", cfg.hideStatusBar, p) { onConfig(cfg.copy(hideStatusBar = it)) } }
-            if (cfg.hideStatusBar) {
-                item { SwitchRow("Battery on Home", cfg.showBattery, p) { onConfig(cfg.copy(showBattery = it)) } }
-                item {
-                    BasicText(
-                        "The battery level shows next to the weather on Home. Swipe down from the very top edge to peek at the real status bar.",
-                        style = ts(p.muted, 14.sp, FontWeight.Normal),
-                    )
-                }
-            }
-
-            // Widgets page
-            item { SectionTitle("Widgets page", p) }
-            item { SwitchRow("Page to the left of Home", cfg.widgetsOn, p) { onConfig(cfg.copy(widgetsOn = it)) } }
-            item {
-                BasicText(
-                    "Swipe right on Home to open it. Add and remove widgets there.",
-                    style = ts(p.muted, 14.sp, FontWeight.Normal),
-                )
-            }
-
-            // All apps panel
-            item { SectionTitle("All apps panel", p) }
-            item { OptionRow("From the bottom (swipe up)", !cfg.drawerRight, p) { onConfig(cfg.copy(drawerRight = false)) } }
-            item { OptionRow("From the right (swipe left)", cfg.drawerRight, p) { onConfig(cfg.copy(drawerRight = true)) } }
-            if (cfg.drawerRight) {
-                item { SwitchRow("Swipe up to start search", cfg.swipeUpSearch, p) { onConfig(cfg.copy(swipeUpSearch = it)) } }
-            }
-            item {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 52.dp)
-                        .softClick(role = Role.Button, onClick = onOpenHidden),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    BasicText("Hidden apps", style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
-                    BasicText(if (cfg.hidden.isEmpty()) "None" else "${cfg.hidden.size}", style = ts(p.muted, 16.sp, FontWeight.Normal))
-                }
-            }
-            item {
-                BasicText(
-                    "Hidden apps don't appear in the all apps panel or in search. You can still add them to Home as favorites.",
-                    style = ts(p.muted, 14.sp, FontWeight.Normal),
-                )
-            }
-
-            // Animations
-            item { SectionTitle("Animations and feedback", p) }
-            item { SwitchRow("Animations", cfg.animations, p) { onConfig(cfg.copy(animations = it)) } }
-            item { SwitchRow("Disable vibration feedback", cfg.noHaptics, p) { onConfig(cfg.copy(noHaptics = it)) } }
-
-            // Wallpaper
-            item { SectionTitle("Wallpaper", p) }
-            item {
-                val c = LocalContext.current
-                BasicText(
-                    "Use matching wallpaper",
-                    style = ts(p.accent, 16.sp, FontWeight.Medium),
-                    modifier = Modifier
-                        .heightIn(min = 52.dp)
-                        .softClick(role = Role.Button) {
-                            appPrefs(c).edit().putInt("wp_seed", c.getColor(android.R.color.system_accent1_500)).apply()
-                            try {
-                                c.startActivity(
-                                    Intent(android.app.WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER)
-                                        .putExtra(
-                                            android.app.WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
-                                            android.content.ComponentName(c, MatchWallpaperService::class.java),
-                                        )
-                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                                )
-                            } catch (_: Exception) {
-                                Toast.makeText(c, "Couldn't open the wallpaper picker", Toast.LENGTH_SHORT).show()
+                val listState = rememberLazyListState()
+                LazyColumn(Modifier.weight(1f), state = listState, contentPadding = PaddingValues(bottom = 40.dp)) {
+                    when (target) {
+                        null -> {
+                            val cats = listOf(
+                                Triple(SettingsPage.FAVORITES, "Favorites", if (favorites.isEmpty()) "None yet" else "${favorites.size} on Home"),
+                                Triple(SettingsPage.HOME, "Home screen", "Clock, date, weather, calendar"),
+                                Triple(SettingsPage.APPS, "Apps", "Hidden apps, dots, tap actions"),
+                                Triple(SettingsPage.GESTURES, "Gestures and panels", if (cfg.drawerRight) "All apps from the right" else "All apps from the bottom"),
+                                Triple(SettingsPage.SEARCH, "Search", "Sources and search engine"),
+                                Triple(SettingsPage.LOOK, "Look and feel", "Font, wallpaper, animations"),
+                            )
+                            items(cats, key = { it.first.name }) { (pg, title, summary) ->
+                                Row(
+                                    Modifier
+                                        .padding(vertical = 5.dp)
+                                        .fillMaxWidth()
+                                        .background(p.pill.copy(alpha = 0.55f), RoundedCornerShape(24.dp))
+                                        .softClick(role = Role.Button) { page = pg }
+                                        .padding(horizontal = 22.dp, vertical = 18.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        BasicText(title, style = ts(p.ink, 20.sp))
+                                        Spacer(Modifier.height(2.dp))
+                                        BasicText(summary, style = ts(p.muted, 14.sp, FontWeight.Normal))
+                                    }
+                                    SideChevron(left = false, color = p.muted)
+                                }
                             }
                         }
-                        .wrapContentHeight(Alignment.CenterVertically),
-                )
-            }
-            item {
-                BasicText(
-                    "A plain wallpaper in the same color as Home. It switches between light and dark with your phone, and keeps your current Material You colors instead of recoloring them.",
-                    style = ts(p.muted, 14.sp, FontWeight.Normal),
-                )
-            }
 
-            // Notification dots
-            item { SectionTitle("Notification dots", p) }
-            item {
-                SwitchRow("Dot on favorites with notifications", cfg.notifDots, p) { on ->
-                    onConfig(cfg.copy(notifDots = on))
-                    if (on && !notifGranted) {
-                        ctx.startActivity(
-                            Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                        )
-                    }
-                }
-            }
-            item {
-                BasicText(
-                    if (notifGranted) "Notification access is on. MinimalYou only checks which apps have a notification and never reads its content."
-                    else "Needs notification access. Turn on MinimalYou notification dots in the list that opens. On Android 13+ you may first need App info > three dots > Allow restricted settings.",
-                    style = ts(p.muted, 14.sp, FontWeight.Normal),
-                )
-            }
-
-            // Tap actions
-            item { SectionTitle("Tap actions", p) }
-            items(Slot.entries) { slot ->
-                val name = apps.firstOrNull { it.key == cfg.appFor(slot) }?.label ?: "Default"
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 52.dp)
-                        .softClick(role = Role.Button) { onPickSlot(slot) },
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    BasicText(slot.label, style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
-                    BasicText(name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.muted, 16.sp, FontWeight.Normal))
-                }
-            }
-
-            // Search
-            item { SectionTitle("Search", p) }
-            item { SwitchRow("Apps", cfg.searchApps, p) { onConfig(cfg.copy(searchApps = it)) } }
-            item {
-                SwitchRow("Contacts", cfg.searchContacts, p) { on ->
-                    if (on && !has(Manifest.permission.READ_CONTACTS)) contactsPerm.launch(Manifest.permission.READ_CONTACTS)
-                    else onConfig(cfg.copy(searchContacts = on))
-                }
-            }
-            item {
-                SwitchRow("Files and documents", cfg.searchFiles, p) { on ->
-                    onConfig(cfg.copy(searchFiles = on))
-                    if (on && !Environment.isExternalStorageManager()) {
-                        Toast.makeText(ctx, "Allow file access, then come back", Toast.LENGTH_LONG).show()
-                        ctx.startActivity(
-                            Intent(
-                                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                                Uri.parse("package:" + ctx.packageName),
-                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                        )
-                    }
-                }
-            }
-            item { SwitchRow("Web search", cfg.searchWeb, p) { onConfig(cfg.copy(searchWeb = it)) } }
-            item {
-                BasicText(
-                    "Search engine",
-                    style = ts(p.muted, 14.sp, FontWeight.Normal),
-                    modifier = Modifier.padding(top = 12.dp),
-                )
-            }
-            items(Engine.entries) { e ->
-                OptionRow(e.label, e == cfg.engine, p) { onConfig(cfg.copy(engine = e)) }
-            }
-
-            // Font
-            item { SectionTitle("Font", p) }
-            items(AppFont.entries) { f ->
-                OptionRow(f.label, f == cfg.font, p, family = f.family) { onConfig(cfg.copy(font = f)) }
-            }
-
-            // Favorites
-            item { SectionTitle("Favorites", p) }
-            if (favorites.isEmpty()) {
-                item { BasicText("No favorites yet. Add some below.", style = ts(p.muted, 15.sp, FontWeight.Normal)) }
-            }
-            itemsIndexed(favorites, key = { _, a -> a.key }) { i, app ->
-                Row(Modifier.fillMaxWidth().heightIn(min = 52.dp), verticalAlignment = Alignment.CenterVertically) {
-                    BasicText(
-                        app.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        style = ts(p.ink, 20.sp),
-                        modifier = Modifier.weight(1f),
-                    )
-                    IconBtn(Glyph.UP, "Move ${app.label} up", if (i > 0) p.muted else p.muted.copy(alpha = 0.3f), i > 0) { move(i, -1) }
-                    IconBtn(Glyph.DOWN, "Move ${app.label} down", if (i < favorites.lastIndex) p.muted else p.muted.copy(alpha = 0.3f), i < favorites.lastIndex) { move(i, 1) }
-                    IconBtn(Glyph.CLOSE, "Remove ${app.label}", p.muted) { onSetFavs(favKeys - app.key) }
-                }
-            }
-            item {
-                BasicText(
-                    if (adding) "Done" else if (full) "Home fits $MAX_FAVORITES favorites" else "Add app",
-                    style = ts(if (full && !adding) p.muted else p.accent, 16.sp, FontWeight.Medium),
-                    modifier = Modifier
-                        .heightIn(min = 52.dp)
-                        .clickable(enabled = adding || !full, role = Role.Button) { adding = !adding }
-                        .wrapContentHeight(Alignment.CenterVertically),
-                )
-            }
-            if (adding) {
-                items(addable, key = { "add" + it.key }) { app ->
-                    AppRow(app, 20.sp, p.ink, onClick = {
-                        onSetFavs(favKeys + app.key)
-                        if (favKeys.size + 1 >= MAX_FAVORITES) adding = false
-                    })
-                }
-            }
-
-            // Gestures (kept at the bottom)
-            item { SectionTitle("Gestures", p) }
-            item {
-                BasicText(
-                    "On Home: double tap a blank spot to sleep, long-press it to open Settings, swipe down for notifications, swipe ${if (cfg.drawerRight) "left" else "up"} for your apps${if (cfg.drawerRight && cfg.swipeUpSearch) ", swipe up to search" else ""}. Sleep and notifications need the MinimalYou gestures accessibility service.",
-                    style = ts(p.muted, 15.sp, FontWeight.Normal),
-                )
-            }
-            item {
-                BasicText(
-                    "Open accessibility settings",
-                    style = ts(p.accent, 16.sp, FontWeight.Medium),
-                    modifier = Modifier
-                        .heightIn(min = 52.dp)
-                        .softClick(role = Role.Button) {
-                            ctx.startActivity(
-                                Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
+                        SettingsPage.FAVORITES -> {
+                            item(key = "cap") { Caption(p, "Up to $maxFavs apps show on Home. Reorder them with the arrows." + if (cfg.showClock) " Hide the clock to fit 9." else "") }
+                            if (favorites.isEmpty()) {
+                                item(key = "empty") { Caption(p, "No favorites yet. Add some below.") }
+                            }
+                            itemsIndexed(favorites, key = { _, a -> a.key }) { i, app ->
+                                Row(
+                                    itemAnim()
+                                        .padding(vertical = 4.dp)
+                                        .fillMaxWidth()
+                                        .background(p.pill.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
+                                        .padding(start = 20.dp, end = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    BasicText(
+                                        app.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        style = ts(p.ink, 20.sp),
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    IconBtn(Glyph.UP, "Move ${app.label} up", if (i > 0) p.muted else p.muted.copy(alpha = 0.3f), i > 0) { move(i, -1) }
+                                    IconBtn(Glyph.DOWN, "Move ${app.label} down", if (i < favorites.lastIndex) p.muted else p.muted.copy(alpha = 0.3f), i < favorites.lastIndex) { move(i, 1) }
+                                    IconBtn(Glyph.CLOSE, "Remove ${app.label}", p.muted) { onSetFavs(favKeys - app.key) }
+                                }
+                            }
+                            item(key = "addBtn") {
+                                BasicText(
+                                    if (adding) "Done" else if (full) "Home fits $maxFavs favorites" else "Add an app",
+                                    style = ts(if (full && !adding) p.muted else p.accent, 16.sp, FontWeight.Medium),
+                                    modifier = itemAnim()
+                                        .padding(top = 8.dp)
+                                        .heightIn(min = 52.dp)
+                                        .padding(horizontal = 8.dp)
+                                        .softClick(role = Role.Button) { if (adding || !full) { adding = !adding; if (!adding) query = "" } }
+                                        .wrapContentHeight(Alignment.CenterVertically),
+                                )
+                            }
+                            if (adding) {
+                                item(key = "addSearch") {
+                                    Pill(p, itemAnim().padding(bottom = 8.dp)) {
+                                        SearchIcon(p.accent)
+                                        Spacer(Modifier.width(12.dp))
+                                        BasicTextField(
+                                            value = query,
+                                            onValueChange = { query = it },
+                                            singleLine = true,
+                                            textStyle = ts(p.ink, 16.sp, FontWeight.Normal),
+                                            cursorBrush = SolidColor(p.accent),
+                                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                            modifier = Modifier.weight(1f),
+                                            decorationBox = { inner ->
+                                                Box(contentAlignment = Alignment.CenterStart) {
+                                                    if (query.isEmpty()) BasicText("Search apps to add", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                                                    inner()
+                                                }
+                                            },
+                                        )
+                                    }
+                                }
+                                val q = query.trim()
+                                val shown = if (q.isEmpty()) addable else addable.filter { it.label.contains(q, ignoreCase = true) }
+                                if (shown.isEmpty()) {
+                                    item(key = "noMatch") { Caption(p, "No matching apps.") }
+                                }
+                                items(shown, key = { it.key }) { app ->
+                                    Row(
+                                        itemAnim()
+                                            .fillMaxWidth()
+                                            .heightIn(min = 52.dp)
+                                            .softClick(role = Role.Button) {
+                                                onSetFavs(favKeys + app.key)
+                                                if (favKeys.size + 1 >= maxFavs) { adding = false; query = "" }
+                                            }
+                                            .padding(horizontal = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        BasicText(app.label, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.ink, 20.sp, FontWeight.Light), modifier = Modifier.weight(1f))
+                                        IconBtn(Glyph.PLUS, "Add ${app.label}", p.accent) {
+                                            onSetFavs(favKeys + app.key)
+                                            if (favKeys.size + 1 >= maxFavs) { adding = false; query = "" }
+                                        }
+                                    }
+                                }
+                            }
                         }
-                        .wrapContentHeight(Alignment.CenterVertically),
-                )
+
+                        SettingsPage.HOME -> {
+                            settingsBlock {
+                                SettingsGroup(p, "Clock style") {
+                                    SwitchRow("Show clock", cfg.showClock, p) { onConfig(cfg.copy(showClock = it)) }
+                                    ClockStyle.entries.forEach { s -> OptionRow(s.label, s == cfg.clock, p) { onConfig(cfg.copy(clock = s)) } }
+                                }
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Time format") {
+                                    HourFormat.entries.forEach { h -> OptionRow(h.label, h == cfg.hours, p) { onConfig(cfg.copy(hours = h)) } }
+                                }
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Date format") {
+                                    DateStyle.entries.forEach { d ->
+                                        val pattern = d.pattern
+                                        val label = if (pattern == null) "Hidden" else now.format(DateTimeFormatter.ofPattern(pattern))
+                                        OptionRow(label, d == cfg.date, p) { onConfig(cfg.copy(date = d)) }
+                                    }
+                                }
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Weather") {
+                                    SwitchRow("Show weather on Home", cfg.weatherOn, p) { onConfig(cfg.copy(weatherOn = it)) }
+                                    SwitchRow("Use my current location", cfg.weatherLocation, p) { on ->
+                                        if (on && !has(Manifest.permission.ACCESS_COARSE_LOCATION)) locationPerm.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                                        else onConfig(cfg.copy(weatherLocation = on, weatherOn = cfg.weatherOn || on))
+                                    }
+                                    Pill(p, Modifier.padding(vertical = 8.dp).alpha(if (cfg.weatherLocation) 0.4f else 1f), color = p.bg) {
+                                        BasicTextField(
+                                            enabled = !cfg.weatherLocation,
+                                            value = cityInput,
+                                            onValueChange = { cityInput = it },
+                                            singleLine = true,
+                                            textStyle = ts(p.ink, 16.sp, FontWeight.Normal),
+                                            cursorBrush = SolidColor(p.accent),
+                                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                            keyboardActions = KeyboardActions(onDone = { setCity() }),
+                                            modifier = Modifier.weight(1f),
+                                            decorationBox = { inner ->
+                                                Box(contentAlignment = Alignment.CenterStart) {
+                                                    if (cityInput.isEmpty()) BasicText("Your city", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                                                    inner()
+                                                }
+                                            },
+                                        )
+                                        BasicText(
+                                            "Set",
+                                            style = ts(p.accent, 16.sp, FontWeight.Medium),
+                                            modifier = Modifier
+                                                .heightIn(min = 48.dp)
+                                                .clickable(enabled = !cfg.weatherLocation, role = Role.Button) { setCity() }
+                                                .wrapContentHeight(Alignment.CenterVertically)
+                                                .padding(start = 12.dp),
+                                        )
+                                    }
+                                    SwitchRow("Use Fahrenheit", cfg.fahrenheit, p) { onConfig(cfg.copy(fahrenheit = it)) }
+                                }
+                                Caption(
+                                    p,
+                                    if (cfg.weatherLocation) "Using your approximate location. Only coordinates are sent, to Open-Meteo."
+                                    else if (cfg.city.isBlank()) "Type a city and tap Set. Only the city name is sent, to Open-Meteo."
+                                    else "Showing weather for ${cfg.city}.",
+                                )
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Calendar") {
+                                    SwitchRow("Show next event on Home", cfg.calendarOn, p) { on ->
+                                        if (on && !has(Manifest.permission.READ_CALENDAR)) calendarPerm.launch(Manifest.permission.READ_CALENDAR)
+                                        else onConfig(cfg.copy(calendarOn = on))
+                                    }
+                                }
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Status bar") {
+                                    SwitchRow("Hide status bar", cfg.hideStatusBar, p) { onConfig(cfg.copy(hideStatusBar = it)) }
+                                    if (cfg.hideStatusBar) {
+                                        SwitchRow("Battery on Home", cfg.showBattery, p) { onConfig(cfg.copy(showBattery = it)) }
+                                    }
+                                }
+                                if (cfg.hideStatusBar) {
+                                    Caption(p, "The battery level shows next to the weather on Home. Swipe down from the very top edge to peek at the real status bar.")
+                                }
+                            }
+                        }
+
+                        SettingsPage.APPS -> {
+                            settingsBlock {
+                                SettingsGroup(p, "Hidden apps") {
+                                    Row(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = 52.dp)
+                                            .softClick(role = Role.Button, onClick = onOpenHidden),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        BasicText("Choose apps to hide", style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
+                                        BasicText(if (cfg.hidden.isEmpty()) "None" else "${cfg.hidden.size}", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                                        Spacer(Modifier.width(8.dp))
+                                        SideChevron(left = false, color = p.muted)
+                                    }
+                                }
+                                Caption(p, "Hidden apps don't appear in the all apps panel or in search. You can still add them to Home as favorites.")
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Notification dots") {
+                                    SwitchRow("Dot on favorites with notifications", cfg.notifDots, p) { on ->
+                                        onConfig(cfg.copy(notifDots = on))
+                                        if (on && !notifGranted) {
+                                            ctx.startActivity(
+                                                Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                            )
+                                        }
+                                    }
+                                }
+                                Caption(
+                                    p,
+                                    if (notifGranted) "Notification access is on. MinimalYou only checks which apps have a notification and never reads its content."
+                                    else "Needs notification access. Turn on MinimalYou notification dots in the list that opens. On Android 13+ you may first need App info > three dots > Allow restricted settings.",
+                                )
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Tap actions") {
+                                    Slot.entries.forEach { slot ->
+                                        val name = apps.firstOrNull { it.key == cfg.appFor(slot) }?.label ?: "Default"
+                                        Row(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(min = 52.dp)
+                                                .softClick(role = Role.Button) { onPickSlot(slot) },
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            BasicText(slot.label, style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
+                                            BasicText(name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.muted, 16.sp, FontWeight.Normal))
+                                            Spacer(Modifier.width(8.dp))
+                                            SideChevron(left = false, color = p.muted)
+                                        }
+                                    }
+                                }
+                                Caption(p, "Pick which app opens when you tap the clock, the date, or the weather on Home.")
+                            }
+                        }
+
+                        SettingsPage.GESTURES -> {
+                            settingsBlock {
+                                SettingsGroup(p, "All apps panel") {
+                                    OptionRow("From the bottom (swipe up)", !cfg.drawerRight, p) { onConfig(cfg.copy(drawerRight = false)) }
+                                    OptionRow("From the right (swipe left)", cfg.drawerRight, p) { onConfig(cfg.copy(drawerRight = true)) }
+                                    if (cfg.drawerRight) {
+                                        SwitchRow("Swipe up to start search", cfg.swipeUpSearch, p) { onConfig(cfg.copy(swipeUpSearch = it)) }
+                                    }
+                                }
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Widgets page") {
+                                    SwitchRow("Page to the left of Home", cfg.widgetsOn, p) { onConfig(cfg.copy(widgetsOn = it)) }
+                                }
+                                Caption(p, "Swipe right on Home to open it. Add and remove widgets there.")
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Home gestures") {
+                                    BasicText(
+                                        "Double tap a blank spot to sleep. Long-press it to open Settings. Swipe down for notifications. Swipe ${if (cfg.drawerRight) "left" else "up"} for your apps${if (cfg.drawerRight && cfg.swipeUpSearch) ", swipe up to search" else ""}.",
+                                        style = ts(p.ink, 15.sp, FontWeight.Normal),
+                                        modifier = Modifier.padding(vertical = 14.dp),
+                                    )
+                                    BasicText(
+                                        "Open accessibility settings",
+                                        style = ts(p.accent, 16.sp, FontWeight.Medium),
+                                        modifier = Modifier
+                                            .heightIn(min = 52.dp)
+                                            .softClick(role = Role.Button) {
+                                                ctx.startActivity(
+                                                    Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                                )
+                                            }
+                                            .wrapContentHeight(Alignment.CenterVertically),
+                                    )
+                                }
+                                Caption(p, "Sleep and notifications need the MinimalYou gestures accessibility service.")
+                            }
+                        }
+
+                        SettingsPage.SEARCH -> {
+                            settingsBlock {
+                                SettingsGroup(p, "Search in") {
+                                    SwitchRow("Apps", cfg.searchApps, p) { onConfig(cfg.copy(searchApps = it)) }
+                                    SwitchRow("Contacts", cfg.searchContacts, p) { on ->
+                                        if (on && !has(Manifest.permission.READ_CONTACTS)) contactsPerm.launch(Manifest.permission.READ_CONTACTS)
+                                        else onConfig(cfg.copy(searchContacts = on))
+                                    }
+                                    SwitchRow("Files and documents", cfg.searchFiles, p) { on ->
+                                        onConfig(cfg.copy(searchFiles = on))
+                                        if (on && !Environment.isExternalStorageManager()) {
+                                            Toast.makeText(ctx, "Allow file access, then come back", Toast.LENGTH_LONG).show()
+                                            ctx.startActivity(
+                                                Intent(
+                                                    android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                                    Uri.parse("package:" + ctx.packageName),
+                                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                            )
+                                        }
+                                    }
+                                    SwitchRow("Web search", cfg.searchWeb, p) { onConfig(cfg.copy(searchWeb = it)) }
+                                }
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Search engine") {
+                                    Engine.entries.forEach { e -> OptionRow(e.label, e == cfg.engine, p) { onConfig(cfg.copy(engine = e)) } }
+                                }
+                            }
+                        }
+
+                        SettingsPage.LOOK -> {
+                            settingsBlock {
+                                SettingsGroup(p, "Font") {
+                                    AppFont.entries.forEach { f -> OptionRow(f.label, f == cfg.font, p, family = f.family) { onConfig(cfg.copy(font = f)) } }
+                                }
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Wallpaper") {
+                                    val c = LocalContext.current
+                                    Row(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = 52.dp)
+                                            .softClick(role = Role.Button) {
+                                                appPrefs(c).edit().putInt("wp_seed", c.getColor(android.R.color.system_accent1_500)).apply()
+                                                try {
+                                                    c.startActivity(
+                                                        Intent(android.app.WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER)
+                                                            .putExtra(
+                                                                android.app.WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
+                                                                android.content.ComponentName(c, MatchWallpaperService::class.java),
+                                                            )
+                                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                                    )
+                                                } catch (_: Exception) {
+                                                    Toast.makeText(c, "Couldn't open the wallpaper picker", Toast.LENGTH_SHORT).show()
+                                                }
+                                            },
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        BasicText("Use matching wallpaper", style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
+                                        SideChevron(left = false, color = p.muted)
+                                    }
+                                }
+                                Caption(p, "A plain wallpaper in the same color as Home. It switches between light and dark with your phone, and keeps your current Material You colors instead of recoloring them.")
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Animations and feedback") {
+                                    SwitchRow("Animations", cfg.animations, p) { onConfig(cfg.copy(animations = it)) }
+                                    SwitchRow("Disable vibration feedback", cfg.noHaptics, p) { onConfig(cfg.copy(noHaptics = it)) }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 }
 
 // ---------- Pieces ----------
+
+private enum class SettingsPage(val title: String) {
+    FAVORITES("Favorites"),
+    HOME("Home screen"),
+    APPS("Apps"),
+    GESTURES("Gestures and panels"),
+    SEARCH("Search"),
+    LOOK("Look and feel"),
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.settingsBlock(content: @Composable ColumnScope.() -> Unit) {
+    item { Column(Modifier.fillMaxWidth(), content = content) }
+}
+
+private fun LazyItemScope.itemAnim(): Modifier = if (animationsOn) Modifier.animateItem() else Modifier
+
+/** A titled, rounded block of related settings. */
+@Composable
+private fun SettingsGroup(p: Palette, title: String? = null, content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = 18.dp)) {
+        if (title != null) {
+            BasicText(
+                title.uppercase(),
+                style = ts(p.accent, 12.sp, FontWeight.Medium, 1.sp),
+                modifier = Modifier.padding(start = 12.dp, bottom = 8.dp),
+            )
+        }
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(p.pill.copy(alpha = 0.55f), RoundedCornerShape(24.dp))
+                .padding(horizontal = 20.dp, vertical = 6.dp),
+            content = content,
+        )
+    }
+}
+
+/** Small explanatory text under a group. */
+@Composable
+private fun Caption(p: Palette, text: String) {
+    BasicText(
+        text,
+        style = ts(p.muted, 13.sp, FontWeight.Normal),
+        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp),
+    )
+}
+
+@Composable
+private fun SideChevron(left: Boolean, color: Color) {
+    Canvas(Modifier.size(18.dp)) {
+        val s = size.minDimension
+        val w = s * 0.11f
+        val x1 = if (left) 0.65f else 0.35f
+        val x2 = if (left) 0.3f else 0.7f
+        drawLine(color, Offset(s * x1, s * 0.15f), Offset(s * x2, s * 0.5f), strokeWidth = w, cap = StrokeCap.Round)
+        drawLine(color, Offset(s * x2, s * 0.5f), Offset(s * x1, s * 0.85f), strokeWidth = w, cap = StrokeCap.Round)
+    }
+}
 
 @Composable
 private fun SectionTitle(text: String, p: Palette) {
@@ -1596,7 +1944,7 @@ private fun RadioDot(selected: Boolean, p: Palette) {
     }
 }
 
-private enum class Glyph { UP, DOWN, CLOSE }
+private enum class Glyph { UP, DOWN, CLOSE, PLUS }
 
 @Composable
 private fun IconBtn(glyph: Glyph, description: String, color: Color, enabled: Boolean = true, onClick: () -> Unit) {
@@ -1614,6 +1962,7 @@ private fun IconBtn(glyph: Glyph, description: String, color: Color, enabled: Bo
             when (glyph) {
                 Glyph.UP -> { line(Offset(s * .15f, s * .65f), Offset(s * .5f, s * .3f)); line(Offset(s * .5f, s * .3f), Offset(s * .85f, s * .65f)) }
                 Glyph.DOWN -> { line(Offset(s * .15f, s * .35f), Offset(s * .5f, s * .7f)); line(Offset(s * .5f, s * .7f), Offset(s * .85f, s * .35f)) }
+                Glyph.PLUS -> { line(Offset(s * .5f, s * .15f), Offset(s * .5f, s * .85f)); line(Offset(s * .15f, s * .5f), Offset(s * .85f, s * .5f)) }
                 Glyph.CLOSE -> { line(Offset(s * .2f, s * .2f), Offset(s * .8f, s * .8f)); line(Offset(s * .8f, s * .2f), Offset(s * .2f, s * .8f)) }
             }
         }
@@ -1621,12 +1970,12 @@ private fun IconBtn(glyph: Glyph, description: String, color: Color, enabled: Bo
 }
 
 @Composable
-private fun Pill(p: Palette, modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) {
+private fun Pill(p: Palette, modifier: Modifier = Modifier, color: Color = p.pill, content: @Composable RowScope.() -> Unit) {
     Row(
         modifier
             .fillMaxWidth()
             .height(56.dp)
-            .background(p.pill, RoundedCornerShape(28.dp))
+            .background(color, RoundedCornerShape(28.dp))
             .padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
         content = content,
@@ -1685,10 +2034,11 @@ private fun AppRow(
     onLongClick: (() -> Unit)? = null,
     weight: FontWeight = FontWeight.Light,
     marker: Color? = null,
+    modifier: Modifier = Modifier,
 ) {
+    // No fillMaxWidth: only the app name itself (and its dot) is tappable, not the empty space beside it.
     Row(
-        Modifier
-            .fillMaxWidth()
+        modifier
             .heightIn(min = 48.dp)
             .softCombined(onClick = onClick, onLongClick = onLongClick),
         verticalAlignment = Alignment.CenterVertically,
@@ -1972,6 +2322,7 @@ private class ScrollPassthroughFrame(ctx: Context) : android.widget.FrameLayout(
 @Composable
 private fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> Unit, onEnd: (Float) -> Unit) {
     val curDrag by rememberUpdatedState(onDrag)
+    val rt = remember { RootTracker() }
     val curEnd by rememberUpdatedState(onEnd)
     val ctx = LocalContext.current
     val host = remember { AppWidgetHost(ctx.applicationContext, WIDGET_HOST_ID) }
@@ -2082,6 +2433,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> Un
         Column(
             Modifier
                 .fillMaxSize()
+                .onGloballyPositioned { rt.coords = it }
                 // Swipe left to push the page back off to the left. Follows the finger; widgets keep their touches
                 // unless the drag is clearly horizontal.
                 .pointerInput(editing) {
@@ -2089,7 +2441,8 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> Un
                     awaitEachGesture {
                         val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                         val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
-                        tracker.addPosition(first.uptimeMillis, first.position)
+                        val r0 = rt.toRoot(first.position)
+                    tracker.addPosition(first.uptimeMillis, r0)
                         var dx = 0f
                         var dy = 0f
                         var pulling = false
@@ -2097,15 +2450,20 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> Un
                             val event = awaitPointerEvent(PointerEventPass.Initial)
                             val change = event.changes.firstOrNull { it.id == first.id } ?: break
                             if (!change.pressed) break
-                            tracker.addPosition(change.uptimeMillis, change.position)
-                            val d = change.positionChange()
-                            dx += d.x; dy += d.y
-                            if (!pulling && !innerScrolling && dx < -3.dp.toPx() && abs(dx) > 0.8f * abs(dy)) pulling = true
+                            val r = rt.toRoot(change.position)
+                            tracker.addPosition(change.uptimeMillis, r)
+                            dx = r.x - r0.x; dy = r.y - r0.y
+                            // A widget with its own scrolling content only loses the gesture to a clear, flat swipe.
+                            val clear = if (innerScrolling) dx < -12.dp.toPx() && abs(dx) > 2f * abs(dy)
+                                else dx < -3.dp.toPx() && abs(dx) > 0.6f * abs(dy)
+                            if (!pulling && clear) pulling = true
                             if (pulling) {
                                 change.consume()
                                 curDrag(1f + dx / size.width.toFloat())
                             }
                         }
+                        // The widget view can swallow its own lift event, which used to leave this stuck on.
+                        innerScrolling = false
                         if (pulling) curEnd(tracker.calculateVelocity().x)
                     }
                 }
@@ -2384,7 +2742,7 @@ private fun rememberStatus(enabled: Boolean): State<SysStatus> {
         if (enabled) {
             while (true) {
                 status.value = withContext(Dispatchers.Default) { readStatus(ctx) }
-                delay(10_000L)
+                delay(4_000L)
             }
         }
     }
@@ -2393,7 +2751,7 @@ private fun rememberStatus(enabled: Boolean): State<SysStatus> {
 
 /** Battery glyph drawn on whole device pixels so edges stay crisp on any density. */
 @Composable
-private fun BatteryIcon(percent: Int, outline: Color, fill: Color) {
+private fun BatteryIcon(percent: Int, outline: Color, fill: Color, charging: Boolean = false, bolt: Color = Color.White, halo: Color = Color.Black) {
     Canvas(Modifier.size(width = 26.dp, height = 13.dp)) {
         fun px(dp: Float) = (dp * density).roundToInt().coerceAtLeast(1).toFloat()
         val w = size.width.roundToInt().toFloat()
@@ -2430,6 +2788,24 @@ private fun BatteryIcon(percent: Int, outline: Color, fill: Color) {
                 size = Size(fillW, h - 2 * inset),
                 cornerRadius = CornerRadius(px(1.5f)),
             )
+        }
+        // Lightning bolt while charging, with a thin halo so it reads over both the filled and empty parts.
+        if (charging) {
+            val cx = bodyW / 2f
+            val cy = h / 2f
+            val bh = h * 0.78f
+            val bw = bh * 0.55f
+            val bp = androidx.compose.ui.graphics.Path().apply {
+                moveTo(cx + bw * 0.12f, cy - bh / 2f)
+                lineTo(cx - bw / 2f, cy + bh * 0.08f)
+                lineTo(cx - bw * 0.04f, cy + bh * 0.08f)
+                lineTo(cx - bw * 0.14f, cy + bh / 2f)
+                lineTo(cx + bw / 2f, cy - bh * 0.10f)
+                lineTo(cx + bw * 0.05f, cy - bh * 0.10f)
+                close()
+            }
+            drawPath(bp, halo, style = Stroke(px(1.6f), join = androidx.compose.ui.graphics.StrokeJoin.Round))
+            drawPath(bp, bolt)
         }
     }
 }
