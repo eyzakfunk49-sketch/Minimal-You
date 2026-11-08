@@ -20,6 +20,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.core.CubicBezierEasing
@@ -265,6 +267,12 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     var searchOpen by remember { mutableStateOf(false) }
     var pickSlot by remember { mutableStateOf<Slot?>(null) }
     var widgetsOpen by remember { mutableStateOf(false) }
+    // 0 = Home, 1 = app list fully pulled up. Follows the finger while dragging, then settles.
+    val drawerP = remember { Animatable(0f) }
+    val pageScope = rememberCoroutineScope()
+    val drawerSpec = remember { spring<Float>(dampingRatio = 0.9f, stiffness = 420f) }
+    LaunchedEffect(drawerOpen) { drawerP.animateTo(if (drawerOpen) 1f else 0f, drawerSpec) }
+    val drawerVisible by remember { derivedStateOf { drawerP.value > 0.001f } }
 
     val updateCfg: (Config) -> Unit = { next ->
         cfg = next
@@ -380,9 +388,17 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     }
                 },
         ) {
+            Box(Modifier.fillMaxSize().graphicsLayer { val s = 1f - 0.05f * drawerP.value; scaleX = s; scaleY = s; alpha = 1f - 0.5f * drawerP.value }) {
             Home(
                 p, cfg, favorites, weather, event,
                 onOpenDrawer = { drawerOpen = true },
+                onDrawerDrag = { f -> pageScope.launch { drawerP.snapTo(f.coerceIn(0f, 1f)) } },
+                onDrawerEnd = { velocity ->
+                    val open = drawerP.value > 0.25f && velocity > -200f || velocity < -900f
+                    drawerOpen = open
+                    pageScope.launch { drawerP.animateTo(if (open) 1f else 0f, drawerSpec, initialVelocity = 0f) }
+                },
+                drawerProgress = { drawerP.value },
                 onOpenSearch = { searchOpen = true },
                 onSettings = { settingsOpen = true },
                 onSleep = { globalAction(ctx, AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN) },
@@ -392,6 +408,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                 onSlot = openSlot,
                 onOpenWidgets = { widgetsOpen = true },
             )
+            }
             AnimatedVisibility(
                 visible = widgetsOpen,
                 enter = slideInHorizontally(tween(380, easing = EmphasizedDecel)) { -it / 4 } + fadeIn(tween(300, easing = EmphasizedDecel)),
@@ -399,17 +416,17 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             ) {
                 WidgetsScreen(p, onClose = { widgetsOpen = false })
             }
-            AnimatedVisibility(
-                visible = drawerOpen,
-                enter = slideInVertically(tween(380, easing = EmphasizedDecel)) { it / 10 } + fadeIn(tween(300, easing = EmphasizedDecel)),
-                exit = slideOutVertically(tween(240, easing = EmphasizedAccel)) { it / 10 } + fadeOut(tween(200, easing = EmphasizedAccel)),
-            ) {
-                Drawer(
-                    p, apps, favorites.map { it.key }.toSet(),
-                    onLaunch = { openApp(ctx, it) },
-                    onTogglePin = togglePin,
-                    onClose = { drawerOpen = false },
-                )
+            if (drawerVisible) {
+                // A page pulled up over Home.
+                Box(Modifier.fillMaxSize().graphicsLayer { translationY = (1f - drawerP.value) * size.height }) {
+                    Drawer(
+                        p, apps, favorites.map { it.key }.toSet(),
+                        progress = { drawerP.value },
+                        onLaunch = { openApp(ctx, it) },
+                        onTogglePin = togglePin,
+                        onClose = { drawerOpen = false },
+                    )
+                }
             }
             AnimatedVisibility(
                 visible = searchOpen,
@@ -490,6 +507,9 @@ private fun Home(
     weather: Weather?,
     event: Event?,
     onOpenDrawer: () -> Unit,
+    onDrawerDrag: (Float) -> Unit,
+    onDrawerEnd: (Float) -> Unit,
+    drawerProgress: () -> Float,
     onOpenSearch: () -> Unit,
     onSettings: () -> Unit,
     onSleep: () -> Unit,
@@ -507,6 +527,8 @@ private fun Home(
         HourFormat.H24 -> true
     }
     val curDrawer by rememberUpdatedState(onOpenDrawer)
+    val curDrag by rememberUpdatedState(onDrawerDrag)
+    val curEnd by rememberUpdatedState(onDrawerEnd)
     val curNotifications by rememberUpdatedState(onNotifications)
     val curWidgets by rememberUpdatedState(onOpenWidgets)
     val showBatteryLine = cfg.hideStatusBar && cfg.showBattery
@@ -531,21 +553,36 @@ private fun Home(
                 awaitEachGesture {
                     val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     val startTime = first.uptimeMillis
+                    val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
+                    tracker.addPosition(first.uptimeMillis, first.position)
                     var dx = 0f
                     var dy = 0f
                     var held = false
+                    var pulling = false
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
                         val change = event.changes.firstOrNull { it.id == first.id } ?: break
                         if (!change.pressed) break
+                        tracker.addPosition(change.uptimeMillis, change.position)
                         val delta = change.positionChange()
                         dx += delta.x
                         dy += delta.y
+                        if (pulling) {
+                            change.consume()
+                            curDrag(-dy / size.height)
+                            continue
+                        }
                         // A press-and-hold is a long press (Settings), not a swipe.
                         if (change.uptimeMillis - startTime >= 450L && abs(dx) + abs(dy) < 24f) held = true
                         if (held) continue
-                        if (abs(dy) > 90f && abs(dy) > 1.5f * abs(dx)) {
-                            if (dy > 0f) curNotifications() else curDrawer()
+                        if (dy < -36f && abs(dy) > 1.5f * abs(dx)) {
+                            pulling = true
+                            change.consume()
+                            curDrag(-dy / size.height)
+                            continue
+                        }
+                        if (dy > 90f && dy > 1.5f * abs(dx)) {
+                            curNotifications()
                             break
                         }
                         if (cfg.widgetsOn && dx > 120f && dx > 1.5f * abs(dy)) {
@@ -553,6 +590,7 @@ private fun Home(
                             break
                         }
                     }
+                    if (pulling) curEnd(tracker.calculateVelocity().y)
                 }
             },
     ) {
@@ -622,7 +660,7 @@ private fun Home(
             )
         }
         Spacer(Modifier.height(32.dp))
-        Pill(p, Modifier.clickable(role = Role.Button, onClick = onOpenSearch)) {
+        Pill(p, Modifier.graphicsLayer { alpha = (1f - drawerProgress() * 4f).coerceIn(0f, 1f) }.clickable(role = Role.Button, onClick = onOpenSearch)) {
             SearchIcon(p.accent)
             Spacer(Modifier.width(12.dp))
             BasicText("Search anything", style = ts(p.muted, 16.sp, FontWeight.Normal))
@@ -639,10 +677,12 @@ private fun Drawer(
     p: Palette,
     apps: List<App>,
     pinned: Set<String>,
+    progress: () -> Float,
     onLaunch: (App) -> Unit,
     onTogglePin: (App) -> Unit,
     onClose: () -> Unit,
 ) {
+    val asApps by remember { derivedStateOf { progress() > 0.55f } }
     var query by remember { mutableStateOf("") }
     val shown = remember(apps, query) {
         val q = query.trim()
@@ -692,7 +732,6 @@ private fun Drawer(
                     }
                     if (!inStrip && abs(dy) > 140f && abs(dy) > 2f * abs(dx)) {
                         if (dy > 0f && startedAtTop && !listState.canScrollBackward) onClose()
-                        else if (dy < 0f && startedAtBottom && !listState.canScrollForward) onClose()
                     }
                 }
             },
@@ -712,7 +751,7 @@ private fun Drawer(
                 modifier = Modifier.weight(1f),
                 decorationBox = { inner ->
                     Box(contentAlignment = Alignment.CenterStart) {
-                        if (query.isEmpty()) BasicText("Search apps", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                        if (query.isEmpty()) BasicText(if (asApps) "Search apps" else "Search anything", style = ts(p.muted, 16.sp, FontWeight.Normal))
                         inner()
                     }
                 },
