@@ -50,6 +50,8 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import android.app.Activity
 import android.appwidget.AppWidgetHost
+import android.appwidget.AppWidgetHostView
+import androidx.compose.foundation.gestures.ScrollableDefaults
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProviderInfo
 import androidx.compose.animation.slideInHorizontally
@@ -1538,6 +1540,84 @@ private fun Chevron(up: Boolean, color: Color) {
     }
 }
 
+/**
+ * Hosts a widget but lets the page scroll when you drag on it. Widgets swallow touches, so a vertical
+ * drag is taken over here (unless something inside the widget can scroll itself) and forwarded to the list.
+ */
+private class ScrollPassthroughFrame(ctx: Context) : android.widget.FrameLayout(ctx) {
+    var onScrollBy: (Float) -> Unit = {}
+    var onFling: (Float) -> Unit = {}
+    private val slop = android.view.ViewConfiguration.get(ctx).scaledTouchSlop
+    private var downX = 0f
+    private var downY = 0f
+    private var lastY = 0f
+    private var scrolling = false
+    private var tracker: android.view.VelocityTracker? = null
+
+    private fun track(ev: android.view.MotionEvent) {
+        val t = tracker ?: android.view.VelocityTracker.obtain().also { tracker = it }
+        val c = android.view.MotionEvent.obtain(ev)
+        c.setLocation(ev.rawX, ev.rawY)
+        t.addMovement(c)
+        c.recycle()
+    }
+
+    private fun scrollableAt(v: android.view.View, x: Float, y: Float): Boolean {
+        if (v.canScrollVertically(1) || v.canScrollVertically(-1)) return true
+        if (v is android.view.ViewGroup) {
+            for (i in v.childCount - 1 downTo 0) {
+                val c = v.getChildAt(i)
+                val cx = x + v.scrollX - c.left
+                val cy = y + v.scrollY - c.top
+                if (cx >= 0 && cy >= 0 && cx < c.width && cy < c.height && scrollableAt(c, cx, cy)) return true
+            }
+        }
+        return false
+    }
+
+    override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                downX = ev.x; downY = ev.y; lastY = ev.rawY; scrolling = false
+                tracker?.recycle(); tracker = null
+                track(ev)
+            }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                track(ev)
+                val dx = ev.x - downX
+                val dy = ev.y - downY
+                if (!scrolling && Math.abs(dy) > slop && Math.abs(dy) > Math.abs(dx) && !scrollableAt(this, downX, downY)) {
+                    scrolling = true
+                    lastY = ev.rawY
+                    return true
+                }
+            }
+        }
+        return scrolling
+    }
+
+    override fun onTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (!scrolling) return false
+        track(ev)
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_MOVE -> {
+                onScrollBy(lastY - ev.rawY)
+                lastY = ev.rawY
+            }
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                val t = tracker
+                if (t != null && ev.actionMasked == android.view.MotionEvent.ACTION_UP) {
+                    t.computeCurrentVelocity(1000)
+                    onFling(-t.yVelocity)
+                }
+                tracker?.recycle(); tracker = null
+                scrolling = false
+            }
+        }
+        return true
+    }
+}
+
 @Composable
 private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
     val ctx = LocalContext.current
@@ -1549,6 +1629,9 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
     var editing by remember { mutableStateOf(false) }
     var choosing by remember { mutableStateOf(false) }
     var pending by remember { mutableStateOf(-1) } // widget id waiting on a bind or configure step
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val fling = ScrollableDefaults.flingBehavior()
 
     // Saved size overrides: height in dp, width as a percent of the page.
     val heights = remember {
@@ -1701,7 +1784,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                     modifier = Modifier.padding(top = 8.dp),
                 )
             }
-            LazyColumn(contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp)) {
+            LazyColumn(state = listState, contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp)) {
                 items(ids, key = { it }) { id ->
                     val info = manager.getAppWidgetInfo(id)
                     if (info == null) {
@@ -1719,9 +1802,24 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                                     .height(heightDp.dp),
                             ) {
                                 AndroidView(
-                                    factory = { c -> host.createView(c, id, info) },
+                                    factory = { c ->
+                                        ScrollPassthroughFrame(c).apply {
+                                            addView(
+                                                host.createView(c, id, info),
+                                                android.view.ViewGroup.LayoutParams(
+                                                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                                ),
+                                            )
+                                        }
+                                    },
                                     update = { v ->
-                                        v.updateAppWidgetSize(Bundle(), widgetWidthDp, heightDp, widgetWidthDp, heightDp)
+                                        v.onScrollBy = { dy -> listState.dispatchRawDelta(dy) }
+                                        v.onFling = { vy ->
+                                            scope.launch { listState.scroll { with(fling) { performFling(vy) } } }
+                                        }
+                                        (v.getChildAt(0) as? AppWidgetHostView)
+                                            ?.updateAppWidgetSize(Bundle(), widgetWidthDp, heightDp, widgetWidthDp, heightDp)
                                     },
                                     modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)),
                                 )
@@ -1791,6 +1889,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                     .sortedBy { it.second.lowercase() }
             }
             var expanded by remember { mutableStateOf<String?>(null) }
+            var query by remember { mutableStateOf("") }
 
             fun detail(info: AppWidgetProviderInfo): String {
                 val cw = if (info.targetCellWidth > 0) info.targetCellWidth
@@ -1806,6 +1905,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                     .fillMaxSize()
                     .background(p.bg)
                     .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
+                    .imePadding()
                     .padding(horizontal = 32.dp)
                     .pointerInput(Unit) { detectTapGestures { } },
             ) {
@@ -1819,65 +1919,58 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                         .wrapContentHeight(Alignment.CenterVertically),
                 )
                 BasicText("Add a widget", style = ts(p.ink, 28.sp))
-                LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp)) {
-                    items(groups, key = { it.first }) { (pkg, appLabel, list) ->
+                val q = query.trim()
+                val visible = remember(q, groups) {
+                    if (q.isEmpty()) groups
+                    else groups.mapNotNull { g ->
+                        if (g.second.contains(q, ignoreCase = true)) g
+                        else {
+                            val hits = g.third.filter { it.loadLabel(pm).toString().contains(q, ignoreCase = true) }
+                            if (hits.isEmpty()) null else Triple(g.first, g.second, hits)
+                        }
+                    }
+                }
+                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(top = 12.dp, bottom = 12.dp)) {
+                    items(visible, key = { it.first }) { (pkg, appLabel, list) ->
+                        // Every app is a drop-down, even with a single widget.
+                        val open = expanded == pkg || (q.isNotEmpty() && !appLabel.contains(q, ignoreCase = true))
                         Column {
-                            if (list.size == 1) {
-                                val info = list[0]
-                                val widgetLabel = info.loadLabel(pm).toString()
-                                val sub = listOf(widgetLabel.takeIf { it != appLabel }, detail(info))
-                                    .filterNotNull()
-                                    .filter { it.isNotBlank() }
-                                    .joinToString(" \u00B7 ")
-                                Column(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(min = 56.dp)
-                                        .clickable(role = Role.Button) { pick(info) }
-                                        .padding(vertical = 8.dp),
-                                ) {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 56.dp)
+                                    .clickable(role = Role.Button) { expanded = if (expanded == pkg) null else pkg }
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
                                     BasicText(appLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.ink, 20.sp))
-                                    if (sub.isNotBlank()) {
-                                        BasicText(sub, maxLines = 2, overflow = TextOverflow.Ellipsis, style = ts(p.muted, 13.sp, FontWeight.Normal))
-                                    }
-                                    WidgetPreview(info, ctx)
+                                    BasicText(
+                                        if (list.size == 1) "1 widget" else "${list.size} widgets",
+                                        style = ts(p.muted, 13.sp, FontWeight.Normal),
+                                    )
                                 }
-                            } else {
-                                val open = expanded == pkg
-                                Row(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(min = 56.dp)
-                                        .clickable(role = Role.Button) { expanded = if (open) null else pkg }
-                                        .padding(vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column(Modifier.weight(1f)) {
-                                        BasicText(appLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.ink, 20.sp))
-                                        BasicText("${list.size} widgets", style = ts(p.muted, 13.sp, FontWeight.Normal))
-                                    }
-                                    Chevron(open, p.accent)
-                                }
-                                if (open) {
-                                    list.forEach { info ->
-                                        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(start = 8.dp)) {
-                                            Box(Modifier.width(2.dp).fillMaxHeight().background(p.accent.copy(alpha = 0.5f)))
-                                            Column(
-                                                Modifier
-                                                    .fillMaxWidth()
-                                                    .heightIn(min = 52.dp)
-                                                    .clickable(role = Role.Button) { pick(info) }
-                                                    .padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
-                                            ) {
-                                                BasicText(
-                                                    info.loadLabel(pm).toString(),
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                    style = ts(p.ink, 18.sp),
-                                                )
-                                                BasicText(detail(info), maxLines = 2, overflow = TextOverflow.Ellipsis, style = ts(p.muted, 13.sp, FontWeight.Normal))
-                                                WidgetPreview(info, ctx)
-                                            }
+                                Chevron(open, p.accent)
+                            }
+                            if (open) {
+                                list.forEach { info ->
+                                    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(start = 8.dp)) {
+                                        Box(Modifier.width(2.dp).fillMaxHeight().background(p.accent.copy(alpha = 0.5f)))
+                                        Column(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(min = 52.dp)
+                                                .clickable(role = Role.Button) { pick(info) }
+                                                .padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
+                                        ) {
+                                            BasicText(
+                                                info.loadLabel(pm).toString(),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                style = ts(p.ink, 18.sp),
+                                            )
+                                            BasicText(detail(info), maxLines = 2, overflow = TextOverflow.Ellipsis, style = ts(p.muted, 13.sp, FontWeight.Normal))
+                                            WidgetPreview(info, ctx)
                                         }
                                     }
                                 }
@@ -1885,6 +1978,26 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                         }
                     }
                 }
+                Pill(p) {
+                    SearchIcon(p.accent)
+                    Spacer(Modifier.width(12.dp))
+                    BasicTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        textStyle = ts(p.ink, 16.sp, FontWeight.Normal),
+                        cursorBrush = SolidColor(p.accent),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        modifier = Modifier.weight(1f),
+                        decorationBox = { inner ->
+                            Box(contentAlignment = Alignment.CenterStart) {
+                                if (query.isEmpty()) BasicText("Search widgets", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                                inner()
+                            }
+                        },
+                    )
+                }
+                Spacer(Modifier.height(24.dp))
             }
         }
     }
