@@ -127,6 +127,9 @@ data class Config(
     val notifDots: Boolean = false,
     val hideStatusBar: Boolean = false,
     val showBattery: Boolean = true,
+    val animations: Boolean = true,
+    val drawerRight: Boolean = false,
+    val hidden: Set<String> = emptySet(),
 )
 
 fun appPrefs(ctx: Context): SharedPreferences =
@@ -163,6 +166,9 @@ fun loadConfig(ctx: Context): Config {
         notifDots = p.getBoolean("notifDots2", false),
         hideStatusBar = p.getBoolean("hideStatusBar", false),
         showBattery = p.getBoolean("showBattery", true),
+        animations = p.getBoolean("animations", true),
+        drawerRight = p.getBoolean("drawerRight", false),
+        hidden = p.getStringSet("hidden", emptySet())?.toSet() ?: emptySet(),
     )
 }
 
@@ -191,6 +197,9 @@ fun saveConfig(ctx: Context, c: Config) {
         .putBoolean("notifDots2", c.notifDots)
         .putBoolean("hideStatusBar", c.hideStatusBar)
         .putBoolean("showBattery", c.showBattery)
+        .putBoolean("animations", c.animations)
+        .putBoolean("drawerRight", c.drawerRight)
+        .putStringSet("hidden", c.hidden)
         .apply()
 }
 

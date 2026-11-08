@@ -20,6 +20,11 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.expandVertically
@@ -166,7 +171,9 @@ private fun openApp(ctx: Context, app: App) {
         .setComponent(app.component)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
     val v = launchView
-    val options = if (v != null) {
+    val options = if (!animationsOn) {
+        android.app.ActivityOptions.makeCustomAnimation(ctx, 0, 0).toBundle()
+    } else if (v != null) {
         android.app.ActivityOptions.makeScaleUpAnimation(
             v, lastTouch.x.toInt() - 48, lastTouch.y.toInt() - 48, 96, 96,
         ).toBundle()
@@ -213,7 +220,7 @@ private fun globalAction(ctx: Context, action: Int) {
     if (service != null) {
         service.performGlobalAction(action)
     } else {
-        Toast.makeText(ctx, "Turn on Minimal gestures in Accessibility settings", Toast.LENGTH_LONG).show()
+        Toast.makeText(ctx, "Turn on MinimalYou gestures in Accessibility settings", Toast.LENGTH_LONG).show()
         ctx.startActivity(
             Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -278,12 +285,16 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     // 0 = Home, 1 = app list fully pulled up. Follows the finger while dragging, then settles.
     val drawerP = remember { Animatable(0f) }
     val pageScope = rememberCoroutineScope()
-    val drawerSpec = remember { spring<Float>(dampingRatio = 0.9f, stiffness = 420f) }
+    val drawerSpec = sp(0.9f, 650f)
     LaunchedEffect(drawerOpen) { drawerP.animateTo(if (drawerOpen) 1f else 0f, drawerSpec) }
     val widgetsP = remember { Animatable(0f) }
     LaunchedEffect(widgetsOpen) { widgetsP.animateTo(if (widgetsOpen) 1f else 0f, drawerSpec) }
     val widgetsVisible by remember { derivedStateOf { widgetsP.value > 0.001f } }
     val drawerVisible by remember { derivedStateOf { drawerP.value > 0.001f } }
+
+    animationsOn = cfg.animations
+    val visibleApps = remember(apps, cfg.hidden) { apps.filter { it.key !in cfg.hidden } }
+    var hiddenOpen by remember { mutableStateOf(false) }
 
     val updateCfg: (Config) -> Unit = { next ->
         cfg = next
@@ -312,6 +323,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     BackHandler(enabled = widgetsOpen) { widgetsOpen = false }
     BackHandler(enabled = searchOpen) { searchOpen = false }
     BackHandler(enabled = settingsOpen) { settingsOpen = false }
+    BackHandler(enabled = hiddenOpen) { hiddenOpen = false }
     BackHandler(enabled = pickSlot != null) { pickSlot = null } // registered last = handled first
 
     // Weather: refresh every 30 minutes (every minute until the first success).
@@ -381,11 +393,11 @@ fun LauncherApp(homePress: Int, resumes: Int) {
         LaunchedEffect(launching) { if (launching) { delay(2500); launching = false } }
         val zoom by animateFloatAsState(
             if (launching) 0.9f else 1f,
-            tween(if (launching) 280 else 380, easing = EmphasizedDecel), label = "zoom",
+            tw(if (launching) 230 else 300, easing = EmphasizedDecel), label = "zoom",
         )
         val fade by animateFloatAsState(
             if (launching) 0f else 1f,
-            tween(if (launching) 220 else 300, easing = EmphasizedDecel), label = "fade",
+            tw(if (launching) 180 else 240, easing = EmphasizedDecel), label = "fade",
         )
         Box(
             Modifier
@@ -402,8 +414,8 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             Box(Modifier.fillMaxSize().graphicsLayer {
                 val s = 1f - 0.05f * drawerP.value
                 scaleX = s; scaleY = s
-                translationX = widgetsP.value * size.width * 0.22f
-                alpha = 1f - 0.5f * drawerP.value - 0.5f * widgetsP.value
+                translationX = widgetsP.value * size.width * 0.22f - (if (cfg.drawerRight) drawerP.value * size.width * 0.12f else 0f)
+                alpha = (1f - drawerP.value - widgetsP.value).coerceIn(0f, 1f)
             }) {
             Home(
                 p, cfg, favorites, weather, event,
@@ -432,7 +444,10 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             )
             }
             if (widgetsVisible) {
-                Box(Modifier.fillMaxSize().graphicsLayer { translationX = -(1f - widgetsP.value) * size.width }) {
+                Box(Modifier.fillMaxSize().graphicsLayer {
+                    translationX = -(1f - widgetsP.value) * size.width
+                    alpha = (widgetsP.value * 1.6f).coerceIn(0f, 1f)
+                }) {
                     WidgetsScreen(
                         p,
                         onClose = { widgetsOpen = false },
@@ -447,9 +462,14 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             }
             if (drawerVisible) {
                 // A page pulled up over Home.
-                Box(Modifier.fillMaxSize().graphicsLayer { translationY = (1f - drawerP.value) * size.height }) {
+                Box(Modifier.fillMaxSize().graphicsLayer {
+                    if (cfg.drawerRight) translationX = (1f - drawerP.value) * size.width
+                    else translationY = (1f - drawerP.value) * size.height
+                    alpha = (drawerP.value * 1.6f).coerceIn(0f, 1f)
+                }) {
                     Drawer(
-                        p, apps, favorites.map { it.key }.toSet(),
+                        p, visibleApps, favorites.map { it.key }.toSet(),
+                        fromRight = cfg.drawerRight,
                         progress = { drawerP.value },
                         onLaunch = { openApp(ctx, it) },
                         onTogglePin = togglePin,
@@ -459,26 +479,34 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             }
             AnimatedVisibility(
                 visible = searchOpen,
-                enter = screenEnter,
-                exit = screenExit,
+                enter = screenEnter(),
+                exit = screenExit(),
             ) {
-                SearchScreen(p, cfg, apps, onClose = { searchOpen = false })
+                SearchScreen(p, cfg, visibleApps, onClose = { searchOpen = false })
             }
             AnimatedVisibility(
                 visible = settingsOpen,
-                enter = screenEnter,
-                exit = screenExit,
+                enter = screenEnter(),
+                exit = screenExit(),
             ) {
                 SettingsScreen(
                     p, cfg, updateCfg,
                     favorites = favorites, apps = apps, onSetFavs = setFavs,
                     onPickSlot = { pickSlot = it },
+                    onOpenHidden = { hiddenOpen = true },
                     onBack = { settingsOpen = false },
+                )
+            }
+            AnimatedVisibility(visible = hiddenOpen, enter = pushEnter(), exit = pushExit()) {
+                HiddenAppsScreen(
+                    p, apps, cfg.hidden,
+                    onToggle = { key -> updateCfg(cfg.copy(hidden = if (key in cfg.hidden) cfg.hidden - key else cfg.hidden + key)) },
+                    onBack = { hiddenOpen = false },
                 )
             }
             var lastSlot by remember { mutableStateOf<Slot?>(null) }
             if (pickSlot != null) lastSlot = pickSlot
-            AnimatedVisibility(visible = pickSlot != null, enter = pushEnter, exit = pushExit) {
+            AnimatedVisibility(visible = pickSlot != null, enter = pushEnter(), exit = pushExit()) {
                 val slot = pickSlot ?: lastSlot
                 if (slot != null) {
                     AppPicker(
@@ -529,24 +557,33 @@ private fun ClockText(p: Palette, style: ClockStyle, now: LocalDateTime, is24: B
     }
 }
 
+/** Set from Settings; when false every transition snaps instead of animating. */
+private var animationsOn = true
+
+private fun <T> tw(ms: Int, easing: Easing = androidx.compose.animation.core.FastOutSlowInEasing): FiniteAnimationSpec<T> =
+    if (animationsOn) tween(ms, easing = easing) else snap()
+
+private fun sp(damping: Float, stiffness: Float): FiniteAnimationSpec<Float> =
+    if (animationsOn) spring(damping, stiffness) else snap()
+
 private val EmphasizedDecel = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
 private val EmphasizedAccel = CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f)
 
 // Full screens (Settings, Search): a gentle rise with a soft zoom.
-private val screenEnter = slideInVertically(tween(380, easing = EmphasizedDecel)) { it / 14 } +
-    scaleIn(tween(380, easing = EmphasizedDecel), initialScale = 0.95f) + fadeIn(tween(260, easing = EmphasizedDecel))
-private val screenExit = slideOutVertically(tween(240, easing = EmphasizedAccel)) { it / 14 } +
-    scaleOut(tween(240, easing = EmphasizedAccel), targetScale = 0.97f) + fadeOut(tween(180, easing = EmphasizedAccel))
+private fun screenEnter(): EnterTransition = slideInVertically(tw(300, easing = EmphasizedDecel)) { it / 14 } +
+    scaleIn(tw(300, easing = EmphasizedDecel), initialScale = 0.95f) + fadeIn(tw(210, easing = EmphasizedDecel))
+private fun screenExit(): ExitTransition = slideOutVertically(tw(190, easing = EmphasizedAccel)) { it / 14 } +
+    scaleOut(tw(190, easing = EmphasizedAccel), targetScale = 0.97f) + fadeOut(tw(150, easing = EmphasizedAccel))
 
 // Sub-menus pushed on top of a screen: slide in from the right.
-private val pushEnter = slideInHorizontally(tween(360, easing = EmphasizedDecel)) { it / 3 } + fadeIn(tween(240, easing = EmphasizedDecel))
-private val pushExit = slideOutHorizontally(tween(260, easing = EmphasizedAccel)) { it / 3 } + fadeOut(tween(180, easing = EmphasizedAccel))
+private fun pushEnter(): EnterTransition = slideInHorizontally(tw(290, easing = EmphasizedDecel)) { it / 3 } + fadeIn(tw(190, easing = EmphasizedDecel))
+private fun pushExit(): ExitTransition = slideOutHorizontally(tw(210, easing = EmphasizedAccel)) { it / 3 } + fadeOut(tw(150, easing = EmphasizedAccel))
 
 @OptIn(ExperimentalFoundationApi::class)
 private fun Modifier.softCombined(onClick: () -> Unit, onLongClick: (() -> Unit)?): Modifier = composed {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
-    val a by animateFloatAsState(if (pressed) 0.5f else 1f, tween(if (pressed) 60 else 240), label = "press")
+    val a by animateFloatAsState(if (pressed) 0.5f else 1f, tw(if (pressed) 50 else 190), label = "press")
     this.graphicsLayer { alpha = a }.combinedClickable(
         interactionSource = src, indication = null, role = Role.Button, onClick = onClick, onLongClick = onLongClick,
     )
@@ -556,7 +593,7 @@ private fun Modifier.softCombined(onClick: () -> Unit, onLongClick: (() -> Unit)
 private fun Modifier.softClick(role: Role? = null, onClick: () -> Unit): Modifier = composed {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
-    val a by animateFloatAsState(if (pressed) 0.5f else 1f, tween(if (pressed) 60 else 240), label = "press")
+    val a by animateFloatAsState(if (pressed) 0.5f else 1f, tw(if (pressed) 50 else 190), label = "press")
     this.graphicsLayer { alpha = a }.clickable(interactionSource = src, indication = null, role = role, onClick = onClick)
 }
 
@@ -613,7 +650,7 @@ private fun Home(
             // One detector for all swipes so they can't steal from each other:
             // down = notifications, up = app list, right = widgets page (if enabled).
             // It watches without consuming and fires as soon as the swipe is clearly intentional.
-            .pointerInput(gesturesEnabled, cfg.widgetsOn) {
+            .pointerInput(gesturesEnabled, cfg.widgetsOn, cfg.drawerRight) {
                 if (!gesturesEnabled) return@pointerInput
                 awaitEachGesture {
                     val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -635,17 +672,21 @@ private fun Home(
                         dy += delta.y
                         if (axis != 0 || swallow) {
                             change.consume() // the rest of this gesture belongs to the swipe, not the app under it
-                            if (axis == 1) curDrag(-dy / size.height)
+                            if (axis == 1) curDrag(if (cfg.drawerRight) -dx / size.width else -dy / size.height)
                             if (axis == 2) curWDrag(dx / size.width)
                             continue
                         }
                         // A press-and-hold is a long press (Settings), not a swipe.
                         if (change.uptimeMillis - startTime >= 450L && abs(dx) + abs(dy) < 24f) held = true
                         if (held) continue
-                        if (dy < -36f && abs(dy) > 1.5f * abs(dx)) {
+                        if (!cfg.drawerRight && dy < -36f && abs(dy) > 1.5f * abs(dx)) {
                             axis = 1
                             change.consume()
                             curDrag(-dy / size.height)
+                        } else if (cfg.drawerRight && dx < -28f && abs(dx) > 1.2f * abs(dy)) {
+                            axis = 1
+                            change.consume()
+                            curDrag(-dx / size.width)
                         } else if (cfg.widgetsOn && dx > 28f && dx > 1.2f * abs(dy)) {
                             axis = 2
                             change.consume()
@@ -656,7 +697,7 @@ private fun Home(
                             swallow = true
                         }
                     }
-                    if (axis == 1) curEnd(tracker.calculateVelocity().y)
+                    if (axis == 1) curEnd(if (cfg.drawerRight) tracker.calculateVelocity().x else tracker.calculateVelocity().y)
                     if (axis == 2) curWEnd(tracker.calculateVelocity().x)
                 }
             },
@@ -744,6 +785,7 @@ private fun Drawer(
     p: Palette,
     apps: List<App>,
     pinned: Set<String>,
+    fromRight: Boolean,
     progress: () -> Float,
     onLaunch: (App) -> Unit,
     onTogglePin: (App) -> Unit,
@@ -780,7 +822,7 @@ private fun Drawer(
             .padding(horizontal = 32.dp)
             // Close the drawer with a clear vertical drag that starts and ends with the list at its
             // top (drag down) or bottom (drag up). Watches without consuming, so scrolling is unaffected.
-            .pointerInput(listState, letters.size) {
+            .pointerInput(listState, letters.size, fromRight) {
                 val stripPx = 28.dp.toPx()
                 awaitEachGesture {
                     val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -797,7 +839,9 @@ private fun Drawer(
                         dx += delta.x
                         dy += delta.y
                     }
-                    if (!inStrip && abs(dy) > 140f && abs(dy) > 2f * abs(dx)) {
+                    if (fromRight) {
+                        if (!inStrip && dx > 120f && abs(dx) > 2f * abs(dy)) onClose()
+                    } else if (!inStrip && abs(dy) > 140f && abs(dy) > 2f * abs(dx)) {
                         if (dy > 0f && startedAtTop && !listState.canScrollBackward) onClose()
                     }
                 }
@@ -1044,6 +1088,7 @@ private fun SettingsScreen(
     apps: List<App>,
     onSetFavs: (List<String>) -> Unit,
     onPickSlot: (Slot) -> Unit,
+    onOpenHidden: () -> Unit,
     onBack: () -> Unit,
 ) {
     val ctx = LocalContext.current
@@ -1218,6 +1263,67 @@ private fun SettingsScreen(
                 )
             }
 
+            // All apps panel
+            item { SectionTitle("All apps panel", p) }
+            item { OptionRow("From the bottom (swipe up)", !cfg.drawerRight, p) { onConfig(cfg.copy(drawerRight = false)) } }
+            item { OptionRow("From the right (swipe left)", cfg.drawerRight, p) { onConfig(cfg.copy(drawerRight = true)) } }
+            item {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 52.dp)
+                        .softClick(role = Role.Button, onClick = onOpenHidden),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    BasicText("Hidden apps", style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
+                    BasicText(if (cfg.hidden.isEmpty()) "None" else "${cfg.hidden.size}", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                }
+            }
+            item {
+                BasicText(
+                    "Hidden apps don't appear in the all apps panel or in search. You can still add them to Home as favorites.",
+                    style = ts(p.muted, 14.sp, FontWeight.Normal),
+                )
+            }
+
+            // Animations
+            item { SectionTitle("Animations", p) }
+            item { SwitchRow("Animations", cfg.animations, p) { onConfig(cfg.copy(animations = it)) } }
+
+            // Wallpaper
+            item { SectionTitle("Wallpaper", p) }
+            item {
+                val c = LocalContext.current
+                BasicText(
+                    "Use matching wallpaper",
+                    style = ts(p.accent, 16.sp, FontWeight.Medium),
+                    modifier = Modifier
+                        .heightIn(min = 52.dp)
+                        .softClick(role = Role.Button) {
+                            appPrefs(c).edit().putInt("wp_seed", c.getColor(android.R.color.system_accent1_500)).apply()
+                            try {
+                                c.startActivity(
+                                    Intent(android.app.WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER)
+                                        .putExtra(
+                                            android.app.WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
+                                            android.content.ComponentName(c, MatchWallpaperService::class.java),
+                                        )
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                )
+                            } catch (_: Exception) {
+                                Toast.makeText(c, "Couldn't open the wallpaper picker", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        .wrapContentHeight(Alignment.CenterVertically),
+                )
+            }
+            item {
+                BasicText(
+                    "A plain wallpaper in the same color as Home. It switches between light and dark with your phone, and keeps your current Material You colors instead of recoloring them.",
+                    style = ts(p.muted, 14.sp, FontWeight.Normal),
+                )
+            }
+
             // Notification dots
             item { SectionTitle("Notification dots", p) }
             item {
@@ -1233,8 +1339,8 @@ private fun SettingsScreen(
             }
             item {
                 BasicText(
-                    if (notifGranted) "Notification access is on. Minimal only checks which apps have a notification and never reads its content."
-                    else "Needs notification access. Turn on Minimal notification dots in the list that opens. On Android 13+ you may first need App info > three dots > Allow restricted settings.",
+                    if (notifGranted) "Notification access is on. MinimalYou only checks which apps have a notification and never reads its content."
+                    else "Needs notification access. Turn on MinimalYou notification dots in the list that opens. On Android 13+ you may first need App info > three dots > Allow restricted settings.",
                     style = ts(p.muted, 14.sp, FontWeight.Normal),
                 )
             }
@@ -1336,7 +1442,7 @@ private fun SettingsScreen(
             item { SectionTitle("Gestures", p) }
             item {
                 BasicText(
-                    "On Home: double tap a blank spot to sleep, long-press it to open Settings, swipe down for notifications, swipe up for your apps. Sleep and notifications need the Minimal gestures accessibility service.",
+                    "On Home: double tap a blank spot to sleep, long-press it to open Settings, swipe down for notifications, swipe ${if (cfg.drawerRight) "left" else "up"} for your apps. Sleep and notifications need the MinimalYou gestures accessibility service.",
                     style = ts(p.muted, 15.sp, FontWeight.Normal),
                 )
             }
@@ -1401,7 +1507,7 @@ private fun SwitchRow(label: String, checked: Boolean, p: Palette, onChange: (Bo
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BasicText(label, style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
-        val t by animateFloatAsState(if (checked) 1f else 0f, spring(dampingRatio = 0.8f, stiffness = 500f), label = "switch")
+        val t by animateFloatAsState(if (checked) 1f else 0f, sp(0.8f, 700f), label = "switch")
         Canvas(Modifier.size(width = 44.dp, height = 26.dp)) {
             val r = size.height / 2f
             drawRoundRect(androidx.compose.ui.graphics.lerp(p.pill, p.accent, t.coerceIn(0f, 1f)), cornerRadius = CornerRadius(r, r))
@@ -1416,8 +1522,8 @@ private fun SwitchRow(label: String, checked: Boolean, p: Palette, onChange: (Bo
 
 @Composable
 private fun RadioDot(selected: Boolean, p: Palette) {
-    val color by animateColorAsState(if (selected) p.accent else p.muted, tween(200), label = "radioColor")
-    val dot by animateFloatAsState(if (selected) 0.24f else 0f, spring(dampingRatio = 0.7f, stiffness = 600f), label = "radioDot")
+    val color by animateColorAsState(if (selected) p.accent else p.muted, tw(160), label = "radioColor")
+    val dot by animateFloatAsState(if (selected) 0.24f else 0f, sp(0.7f, 800f), label = "radioDot")
     Canvas(Modifier.size(20.dp)) {
         val s = size.minDimension
         drawCircle(color, radius = s * 0.45f, style = Stroke(s * 0.1f))
@@ -1532,6 +1638,34 @@ private fun AppRow(
         if (marker != null) {
             Spacer(Modifier.width(12.dp))
             Canvas(Modifier.size(8.dp)) { drawCircle(marker) }
+        }
+    }
+}
+
+@Composable
+private fun HiddenAppsScreen(p: Palette, apps: List<App>, hidden: Set<String>, onToggle: (String) -> Unit, onBack: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(p.bg)
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
+            .padding(horizontal = 32.dp)
+            .pointerInput(Unit) { detectTapGestures { } },
+    ) {
+        BasicText(
+            "Back",
+            style = ts(p.accent, 16.sp, FontWeight.Medium),
+            modifier = Modifier
+                .padding(top = 8.dp)
+                .heightIn(min = 52.dp)
+                .softClick(role = Role.Button, onClick = onBack)
+                .wrapContentHeight(Alignment.CenterVertically),
+        )
+        BasicText("Hidden apps", style = ts(p.ink, 28.sp))
+        LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp)) {
+            items(apps, key = { it.key }) { app ->
+                SwitchRow(app.label, app.key in hidden, p) { onToggle(app.key) }
+            }
         }
     }
 }
@@ -1676,7 +1810,7 @@ private fun WidgetPreview(info: AppWidgetProviderInfo, ctx: Context) {
 
 @Composable
 private fun Chevron(up: Boolean, color: Color) {
-    val rot by animateFloatAsState(if (up) 180f else 0f, tween(280, easing = EmphasizedDecel), label = "chevron")
+    val rot by animateFloatAsState(if (up) 180f else 0f, tw(220, easing = EmphasizedDecel), label = "chevron")
     Canvas(Modifier.size(18.dp).graphicsLayer { rotationZ = rot }) {
         val s = size.minDimension
         val w = s * 0.11f
@@ -2037,7 +2171,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> Un
             }
         }
 
-        AnimatedVisibility(visible = choosing, enter = pushEnter, exit = pushExit) {
+        AnimatedVisibility(visible = choosing, enter = pushEnter(), exit = pushExit()) {
             val pm = ctx.packageManager
             val dpi = ctx.resources.displayMetrics.density
             // One entry per app; apps with several widgets expand to show them.
@@ -2120,8 +2254,8 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> Un
                             }
                             AnimatedVisibility(
                                 visible = open,
-                                enter = expandVertically(tween(320, easing = EmphasizedDecel)) + fadeIn(tween(240)),
-                                exit = shrinkVertically(tween(240, easing = EmphasizedAccel)) + fadeOut(tween(120)),
+                                enter = expandVertically(tw(260, easing = EmphasizedDecel)) + fadeIn(tw(190)),
+                                exit = shrinkVertically(tw(190, easing = EmphasizedAccel)) + fadeOut(tw(100)),
                             ) {
                               Column {
                                 list.forEach { info ->
