@@ -15,9 +15,22 @@ android {
         versionCode = 1
         versionName = "1.0"
     }
+    // A fixed signing key kept with the project, so every build installs over the previous one
+    // and keeps your settings, instead of Android refusing because the key changed.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
+            // Signed with the debug key so the APK installs without extra setup.
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
     }
