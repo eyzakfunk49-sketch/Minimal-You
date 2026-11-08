@@ -139,7 +139,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private const val MAX_FAVORITES = 6
+/** Home fits 6 favorites, or 8 when the clock is hidden and frees up the space. */
+private fun maxFavorites(cfg: Config) = if (cfg.showClock) 6 else 8
 
 class MainActivity : ComponentActivity() {
     // Bumped whenever Home is pressed while we're already open, so overlays can close.
@@ -395,8 +396,8 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     val togglePin: (App) -> Unit = { app ->
         val current = favorites.map { it.key }
         val pinned = app.key in current
-        if (!pinned && current.size >= MAX_FAVORITES) {
-            Toast.makeText(ctx, "Home fits $MAX_FAVORITES favorites. Remove one in Settings.", Toast.LENGTH_SHORT).show()
+        if (!pinned && current.size >= maxFavorites(cfg)) {
+            Toast.makeText(ctx, "Home fits ${maxFavorites(cfg)} favorites. Remove one in Settings.", Toast.LENGTH_SHORT).show()
         } else {
             setFavs(if (pinned) current - app.key else current + app.key)
             Toast.makeText(ctx, if (pinned) "Removed from Home" else "Added to Home", Toast.LENGTH_SHORT).show()
@@ -867,7 +868,7 @@ private fun Home(
             }
         }
         Spacer(Modifier.weight(1f))
-        favorites.forEach {
+        favorites.take(maxFavorites(cfg)).forEach {
             AppRow(
                 it, 30.sp, p.ink, onClick = { onLaunch(it) }, weight = FontWeight.Normal,
                 marker = if (cfg.notifDots && it.component.packageName in NotifState.active) p.accent else null,
@@ -1283,7 +1284,8 @@ private fun SettingsScreen(
     var page by remember { mutableStateOf<SettingsPage?>(null) }
     var cityInput by remember { mutableStateOf(cfg.city) }
     val favKeys = favorites.map { it.key }
-    val full = favKeys.size >= MAX_FAVORITES
+    val maxFavs = maxFavorites(cfg)
+    val full = favKeys.size >= maxFavs
     val addable = remember(apps, favKeys) { apps.filter { it.key !in favKeys } }
 
     fun has(permission: String) = ctx.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
@@ -1412,7 +1414,7 @@ private fun SettingsScreen(
                         }
 
                         SettingsPage.FAVORITES -> {
-                            item(key = "cap") { Caption(p, "Up to $MAX_FAVORITES apps show on Home. Reorder them with the arrows.") }
+                            item(key = "cap") { Caption(p, "Up to $maxFavs apps show on Home. Reorder them with the arrows." + if (cfg.showClock) " Hide the clock to fit 8." else "") }
                             if (favorites.isEmpty()) {
                                 item(key = "empty") { Caption(p, "No favorites yet. Add some below.") }
                             }
@@ -1437,7 +1439,7 @@ private fun SettingsScreen(
                             }
                             item(key = "addBtn") {
                                 BasicText(
-                                    if (adding) "Done" else if (full) "Home fits $MAX_FAVORITES favorites" else "Add an app",
+                                    if (adding) "Done" else if (full) "Home fits $maxFavs favorites" else "Add an app",
                                     style = ts(if (full && !adding) p.muted else p.accent, 16.sp, FontWeight.Medium),
                                     modifier = itemAnim()
                                         .padding(top = 8.dp)
@@ -1481,7 +1483,7 @@ private fun SettingsScreen(
                                             .heightIn(min = 52.dp)
                                             .softClick(role = Role.Button) {
                                                 onSetFavs(favKeys + app.key)
-                                                if (favKeys.size + 1 >= MAX_FAVORITES) { adding = false; query = "" }
+                                                if (favKeys.size + 1 >= maxFavs) { adding = false; query = "" }
                                             }
                                             .padding(horizontal = 8.dp),
                                         verticalAlignment = Alignment.CenterVertically,
@@ -1489,7 +1491,7 @@ private fun SettingsScreen(
                                         BasicText(app.label, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.ink, 20.sp, FontWeight.Light), modifier = Modifier.weight(1f))
                                         IconBtn(Glyph.PLUS, "Add ${app.label}", p.accent) {
                                             onSetFavs(favKeys + app.key)
-                                            if (favKeys.size + 1 >= MAX_FAVORITES) { adding = false; query = "" }
+                                            if (favKeys.size + 1 >= maxFavs) { adding = false; query = "" }
                                         }
                                     }
                                 }
