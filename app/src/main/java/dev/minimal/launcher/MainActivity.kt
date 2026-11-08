@@ -819,8 +819,10 @@ private fun Home(
                         .wrapContentHeight(Alignment.CenterVertically),
                 )
             }
-            Box(Modifier.softClick(role = Role.Button) { onSlot(Slot.CLOCK) }) {
-                ClockText(p, cfg.clock, now, is24)
+            if (cfg.showClock) {
+                Box(Modifier.softClick(role = Role.Button) { onSlot(Slot.CLOCK) }) {
+                    ClockText(p, cfg.clock, now, is24)
+                }
             }
             if (weather != null || showBatteryLine) {
                 Row(
@@ -1497,6 +1499,7 @@ private fun SettingsScreen(
                         SettingsPage.HOME -> {
                             settingsBlock {
                                 SettingsGroup(p, "Clock style") {
+                                    SwitchRow("Show clock", cfg.showClock, p) { onConfig(cfg.copy(showClock = it)) }
                                     ClockStyle.entries.forEach { s -> OptionRow(s.label, s == cfg.clock, p) { onConfig(cfg.copy(clock = s)) } }
                                 }
                             }

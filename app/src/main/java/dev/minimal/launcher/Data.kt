@@ -127,6 +127,7 @@ data class Config(
     val notifDots: Boolean = false,
     val hideStatusBar: Boolean = false,
     val showBattery: Boolean = true,
+    val showClock: Boolean = true,
     val animations: Boolean = true,
     val drawerRight: Boolean = false,
     val swipeUpSearch: Boolean = false,
@@ -168,6 +169,7 @@ fun loadConfig(ctx: Context): Config {
         notifDots = p.getBoolean("notifDots2", false),
         hideStatusBar = p.getBoolean("hideStatusBar", false),
         showBattery = p.getBoolean("showBattery", true),
+        showClock = p.getBoolean("showClock", true),
         animations = p.getBoolean("animations", true),
         drawerRight = p.getBoolean("drawerRight", false),
         swipeUpSearch = p.getBoolean("swipeUpSearch", false),
@@ -201,6 +203,7 @@ fun saveConfig(ctx: Context, c: Config) {
         .putBoolean("notifDots2", c.notifDots)
         .putBoolean("hideStatusBar", c.hideStatusBar)
         .putBoolean("showBattery", c.showBattery)
+        .putBoolean("showClock", c.showClock)
         .putBoolean("animations", c.animations)
         .putBoolean("drawerRight", c.drawerRight)
         .putBoolean("swipeUpSearch", c.swipeUpSearch)
