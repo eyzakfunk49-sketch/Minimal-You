@@ -84,6 +84,12 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import android.accessibilityservice.AccessibilityService
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.Dispatchers
@@ -145,6 +151,20 @@ private fun launch(ctx: Context, app: App) {
     try { ctx.startActivity(intent) } catch (_: Exception) { }
 }
 
+/** Lock screen / notification shade need the accessibility service (see GestureService). */
+private fun globalAction(ctx: Context, action: Int) {
+    val service = GestureService.instance
+    if (service != null) {
+        service.performGlobalAction(action)
+    } else {
+        Toast.makeText(ctx, "Turn on Minimal gestures in Accessibility settings", Toast.LENGTH_LONG).show()
+        ctx.startActivity(
+            Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
+}
+
 private fun prefs(ctx: Context) = ctx.getSharedPreferences("minimal", Context.MODE_PRIVATE)
 
 private fun readFavs(ctx: Context): List<String>? =
@@ -177,15 +197,15 @@ private fun palette(): Palette {
     fun c(id: Int) = Color(ctx.getColor(id))
     return if (isSystemInDarkTheme()) Palette(
         bg = c(android.R.color.system_neutral1_900),
-        ink = c(android.R.color.system_neutral1_100),
-        muted = c(android.R.color.system_neutral2_300),
-        accent = c(android.R.color.system_accent1_200),
+        ink = c(android.R.color.system_neutral1_10),
+        muted = c(android.R.color.system_neutral2_200),
+        accent = c(android.R.color.system_accent1_100),
         pill = c(android.R.color.system_neutral1_800),
     ) else Palette(
         bg = c(android.R.color.system_neutral1_50),
-        ink = c(android.R.color.system_neutral1_900),
-        muted = c(android.R.color.system_neutral2_600),
-        accent = c(android.R.color.system_accent1_600),
+        ink = c(android.R.color.system_neutral1_1000),
+        muted = c(android.R.color.system_neutral2_700),
+        accent = c(android.R.color.system_accent1_700),
         pill = c(android.R.color.system_accent2_100),
     )
 }
@@ -250,6 +270,9 @@ fun LauncherApp(homePress: Int) {
                 p, favorites,
                 onOpenDrawer = { drawerOpen = true },
                 onSettings = { settingsOpen = true },
+                onSleep = { globalAction(ctx, AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN) },
+                onNotifications = { globalAction(ctx, AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS) },
+                gesturesEnabled = !drawerOpen && !settingsOpen,
                 onLaunch = { launch(ctx, it) },
             )
             AnimatedVisibility(
@@ -261,7 +284,7 @@ fun LauncherApp(homePress: Int) {
                     p, apps, favorites.map { it.key }.toSet(),
                     onLaunch = { launch(ctx, it) },
                     onTogglePin = togglePin,
-                    onSettings = { settingsOpen = true },
+                    onClose = { drawerOpen = false },
                 )
             }
             AnimatedVisibility(
@@ -269,7 +292,7 @@ fun LauncherApp(homePress: Int) {
                 enter = slideInVertically { it / 3 } + fadeIn(),
                 exit = slideOutVertically { it / 3 } + fadeOut(),
             ) {
-                Settings(
+                SettingsScreen(
                     p, font,
                     onFont = { font = it; writeFont(ctx, it) },
                     favorites = favorites, apps = apps, onSetFavs = setFavs,
@@ -302,13 +325,15 @@ private fun rememberNow(): State<LocalDateTime> {
 
 // ---------- Home ----------
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun Home(
     p: Palette,
     favorites: List<App>,
     onOpenDrawer: () -> Unit,
     onSettings: () -> Unit,
+    onSleep: () -> Unit,
+    onNotifications: () -> Unit,
+    gesturesEnabled: Boolean,
     onLaunch: (App) -> Unit,
 ) {
     val ctx = LocalContext.current
@@ -321,28 +346,36 @@ private fun Home(
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.systemBars)
             .padding(horizontal = 32.dp)
-            .pointerInput(Unit) {
-                var total = 0f
-                detectVerticalDragGestures(
-                    onDragStart = { total = 0f },
-                    onDragEnd = { if (total < -120f) onOpenDrawer() },
-                    onDragCancel = {},
-                    onVerticalDrag = { _, dy -> total += dy },
-                )
+            // Blank space: double tap = sleep, long press = settings.
+            .pointerInput(gesturesEnabled) {
+                if (gesturesEnabled) {
+                    detectTapGestures(onDoubleTap = { onSleep() }, onLongPress = { onSettings() })
+                }
+            }
+            // Swipe up = app list, swipe down = notifications.
+            .pointerInput(gesturesEnabled) {
+                if (gesturesEnabled) {
+                    var total = 0f
+                    detectVerticalDragGestures(
+                        onDragStart = { total = 0f },
+                        onDragEnd = {
+                            if (total < -120f) onOpenDrawer() else if (total > 120f) onNotifications()
+                        },
+                        onDragCancel = {},
+                        onVerticalDrag = { _, dy -> total += dy },
+                    )
+                }
             },
     ) {
         Spacer(Modifier.height(64.dp))
-        // Long-press the clock to open Settings.
-        Column(
-            Modifier.fillMaxWidth().combinedClickable(
-                onLongClickLabel = "Open settings", onLongClick = onSettings, onClick = {},
-            ),
-        ) {
+        Column(Modifier.fillMaxWidth()) {
             BasicText(date, style = ts(p.muted, 15.sp, FontWeight.Normal))
             BasicText(time, style = ts(p.ink, 96.sp, FontWeight.Light, (-4).sp, 104.sp))
         }
         Spacer(Modifier.weight(1f))
-        favorites.forEach { AppRow(it, 30.sp, p.ink, onClick = { onLaunch(it) }) }
+        favorites.forEach {
+            AppRow(it, 30.sp, p.ink, onClick = { onLaunch(it) }, weight = FontWeight.Normal)
+        }
         Spacer(Modifier.height(32.dp))
         Pill(p, Modifier.clickable(role = Role.Button, onClick = onOpenDrawer)) {
             SearchIcon(p.accent)
@@ -363,7 +396,7 @@ private fun Drawer(
     pinned: Set<String>,
     onLaunch: (App) -> Unit,
     onTogglePin: (App) -> Unit,
-    onSettings: () -> Unit,
+    onClose: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
     val shown = remember(apps, query) {
@@ -376,13 +409,43 @@ private fun Drawer(
         }.toSortedMap()
     }
 
+    // Pulling down while the list is already at the top closes the drawer.
+    val pullToClose = remember(onClose) {
+        object : NestedScrollConnection {
+            var pulled = 0f
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && available.y > 0f) {
+                    pulled += available.y
+                    if (pulled > 150f) { pulled = 0f; onClose() }
+                } else if (available.y <= 0f) {
+                    pulled = 0f
+                }
+                return Offset.Zero
+            }
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                pulled = 0f
+                return Velocity.Zero
+            }
+        }
+    }
+
     Column(
         Modifier
             .fillMaxSize()
             .background(p.bg)
             .windowInsetsPadding(WindowInsets.systemBars)
             .imePadding()
-            .padding(horizontal = 32.dp),
+            .padding(horizontal = 32.dp)
+            // Swipe down on the search area or any blank spot also closes it.
+            .pointerInput(Unit) {
+                var total = 0f
+                detectVerticalDragGestures(
+                    onDragStart = { total = 0f },
+                    onDragEnd = { if (total > 120f) onClose() },
+                    onDragCancel = {},
+                    onVerticalDrag = { _, dy -> total += dy },
+                )
+            },
     ) {
         Spacer(Modifier.height(24.dp))
         Pill(p) {
@@ -405,18 +468,8 @@ private fun Drawer(
                 },
             )
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            BasicText(
-                "Settings",
-                style = ts(p.accent, 14.sp, FontWeight.Medium),
-                modifier = Modifier
-                    .heightIn(min = 48.dp)
-                    .clickable(role = Role.Button, onClick = onSettings)
-                    .wrapContentHeight(Alignment.CenterVertically)
-                    .padding(horizontal = 4.dp),
-            )
-        }
-        LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+        Spacer(Modifier.height(8.dp))
+        LazyColumn(Modifier.nestedScroll(pullToClose), contentPadding = PaddingValues(bottom = 24.dp)) {
             groups.forEach { (letter, list) ->
                 stickyHeader(key = "h$letter") {
                     Box(Modifier.fillMaxWidth().background(p.bg).padding(top = 12.dp, bottom = 4.dp)) {
@@ -424,10 +477,13 @@ private fun Drawer(
                     }
                 }
                 items(list, key = { it.key }) { app ->
+                    val isPinned = app.key in pinned
                     AppRow(
-                        app, 22.sp, if (app.key in pinned) p.accent else p.ink,
+                        app, 22.sp, p.ink,
                         onClick = { onLaunch(app) },
                         onLongClick = { onTogglePin(app) },
+                        weight = if (isPinned) FontWeight.Medium else FontWeight.Light,
+                        marker = if (isPinned) p.accent else null,
                     )
                 }
             }
@@ -438,7 +494,7 @@ private fun Drawer(
 // ---------- Settings ----------
 
 @Composable
-private fun Settings(
+private fun SettingsScreen(
     p: Palette,
     font: AppFont,
     onFont: (AppFont) -> Unit,
@@ -447,6 +503,7 @@ private fun Settings(
     onSetFavs: (List<String>) -> Unit,
     onBack: () -> Unit,
 ) {
+    val ctx = LocalContext.current
     var adding by remember { mutableStateOf(false) }
     val favKeys = favorites.map { it.key }
     val full = favKeys.size >= MAX_FAVORITES
@@ -494,6 +551,28 @@ private fun Settings(
                         style = TextStyle(color = p.ink, fontSize = 22.sp, fontWeight = FontWeight.Light, fontFamily = f.family),
                     )
                 }
+            }
+            item { SectionTitle("Gestures", p) }
+            item {
+                BasicText(
+                    "On Home: double tap a blank spot to sleep, long-press it to open Settings, swipe down for notifications, swipe up for apps. Sleep and notifications need the Minimal gestures accessibility service.",
+                    style = ts(p.muted, 15.sp, FontWeight.Normal),
+                )
+            }
+            item {
+                BasicText(
+                    "Open accessibility settings",
+                    style = ts(p.accent, 16.sp, FontWeight.Medium),
+                    modifier = Modifier
+                        .heightIn(min = 52.dp)
+                        .clickable(role = Role.Button) {
+                            ctx.startActivity(
+                                Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
+                        .wrapContentHeight(Alignment.CenterVertically),
+                )
             }
             item { SectionTitle("Favorites", p) }
             if (favorites.isEmpty()) {
@@ -608,16 +687,26 @@ private fun AppRow(
     color: Color,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    weight: FontWeight = FontWeight.Light,
+    marker: Color? = null,
 ) {
-    BasicText(
-        app.label,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        style = ts(color, size),
-        modifier = Modifier
+    Row(
+        Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onLongClick)
-            .wrapContentHeight(Alignment.CenterVertically),
-    )
+            .combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onLongClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        BasicText(
+            app.label,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = ts(color, size, weight),
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        if (marker != null) {
+            Spacer(Modifier.width(12.dp))
+            Canvas(Modifier.size(8.dp)) { drawCircle(marker) }
+        }
+    }
 }
