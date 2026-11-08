@@ -445,3 +445,85 @@ fun isUrl(q: String): Boolean = Patterns.WEB_URL.matcher(q).matches()
 
 fun normalizeUrl(q: String): String =
     if (q.startsWith("http://", true) || q.startsWith("https://", true)) q else "https://$q"
+
+
+// ---------- Search ranking ----------
+
+/** Counts how often an app is opened so search can put the ones you use first. */
+fun recordLaunch(ctx: Context, key: String) {
+    val p = appPrefs(ctx)
+    p.edit().putInt("use_$key", p.getInt("use_$key", 0) + 1).apply()
+}
+
+/** Names that start with the query first, then words that start with it, then anywhere; ties go to the most used. */
+fun rankApps(ctx: Context, apps: List<App>, query: String, limit: Int): List<App> {
+    val p = appPrefs(ctx)
+    val s = query.lowercase()
+    fun score(a: App): Int {
+        val l = a.label.lowercase()
+        return when {
+            l.startsWith(s) -> 0
+            l.split(' ', '-', '_', '.').any { it.startsWith(s) } -> 1
+            l.contains(s) -> 2
+            else -> 3
+        }
+    }
+    return apps.filter { score(it) < 3 }
+        .sortedWith(compareBy<App>({ score(it) }, { -p.getInt("use_${it.key}", 0) }, { it.label.lowercase() }))
+        .take(limit)
+}
+
+// ---------- Backup ----------
+
+private fun skipInBackup(key: String) = key.startsWith("widget_") || key.startsWith("use_") || key == "wp_seed"
+
+/** Every setting and the favorites as one JSON file. Widgets are left out: their ids only mean something on this phone. */
+fun exportSettings(ctx: Context): String {
+    val prefs = org.json.JSONObject()
+    for ((k, v) in appPrefs(ctx).all) {
+        if (skipInBackup(k)) continue
+        val e = org.json.JSONObject()
+        when (v) {
+            is Boolean -> e.put("t", "b").put("v", v)
+            is Int -> e.put("t", "i").put("v", v)
+            is Long -> e.put("t", "l").put("v", v)
+            is Float -> e.put("t", "f").put("v", v.toDouble())
+            is String -> e.put("t", "s").put("v", v)
+            is Set<*> -> e.put("t", "ss").put("v", org.json.JSONArray(v.map { it.toString() }))
+            else -> continue
+        }
+        prefs.put(k, e)
+    }
+    return org.json.JSONObject().put("app", "MinimalYou").put("version", 1).put("prefs", prefs).toString(2)
+}
+
+/** Returns false (and changes nothing) if the text isn't a MinimalYou backup. */
+fun importSettings(ctx: Context, text: String): Boolean {
+    try {
+        val root = org.json.JSONObject(text)
+        if (root.optString("app") != "MinimalYou") return false
+        val prefs = root.getJSONObject("prefs")
+        val ed = appPrefs(ctx).edit()
+        val keys = prefs.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            if (skipInBackup(k)) continue
+            val e = prefs.getJSONObject(k)
+            when (e.getString("t")) {
+                "b" -> ed.putBoolean(k, e.getBoolean("v"))
+                "i" -> ed.putInt(k, e.getInt("v"))
+                "l" -> ed.putLong(k, e.getLong("v"))
+                "f" -> ed.putFloat(k, e.getDouble("v").toFloat())
+                "s" -> ed.putString(k, e.getString("v"))
+                "ss" -> {
+                    val arr = e.getJSONArray("v")
+                    ed.putStringSet(k, (0 until arr.length()).map { arr.getString(it) }.toSet())
+                }
+            }
+        }
+        ed.apply()
+        return true
+    } catch (e: Exception) {
+        return false
+    }
+}
