@@ -124,7 +124,7 @@ data class Config(
     val weatherApp: String = "",
     val weatherLocation: Boolean = false,
     val widgetsOn: Boolean = false,
-    val notifDots: Boolean = true,
+    val notifDots: Boolean = false,
     val hideStatusBar: Boolean = false,
     val showBattery: Boolean = true,
 )
@@ -160,7 +160,7 @@ fun loadConfig(ctx: Context): Config {
         weatherApp = p.getString("weatherApp", "") ?: "",
         weatherLocation = p.getBoolean("weatherLocation", false),
         widgetsOn = p.getBoolean("widgetsOn", false),
-        notifDots = p.getBoolean("notifDots", true),
+        notifDots = p.getBoolean("notifDots2", false),
         hideStatusBar = p.getBoolean("hideStatusBar", false),
         showBattery = p.getBoolean("showBattery", true),
     )
@@ -188,7 +188,7 @@ fun saveConfig(ctx: Context, c: Config) {
         .putString("weatherApp", c.weatherApp)
         .putBoolean("weatherLocation", c.weatherLocation)
         .putBoolean("widgetsOn", c.widgetsOn)
-        .putBoolean("notifDots", c.notifDots)
+        .putBoolean("notifDots2", c.notifDots)
         .putBoolean("hideStatusBar", c.hideStatusBar)
         .putBoolean("showBattery", c.showBattery)
         .apply()

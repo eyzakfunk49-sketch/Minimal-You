@@ -20,6 +20,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -143,12 +145,24 @@ class MainActivity : ComponentActivity() {
 
 // ---------- Actions ----------
 
+// Where the last touch landed and the window view, so apps can zoom open from the tapped spot.
+private var launchView: android.view.View? = null
+private var lastTouch = Offset.Zero
+private var launching by mutableStateOf(false)
+
 private fun openApp(ctx: Context, app: App) {
     val intent = Intent(Intent.ACTION_MAIN)
         .addCategory(Intent.CATEGORY_LAUNCHER)
         .setComponent(app.component)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-    try { ctx.startActivity(intent) } catch (_: Exception) { }
+    val v = launchView
+    val options = if (v != null) {
+        android.app.ActivityOptions.makeScaleUpAnimation(
+            v, lastTouch.x.toInt() - 48, lastTouch.y.toInt() - 48, 96, 96,
+        ).toBundle()
+    } else null
+    launching = true
+    try { ctx.startActivity(intent, options) } catch (_: Exception) { launching = false }
 }
 
 private fun openUri(ctx: Context, uri: Uri, mime: String? = null) {
@@ -342,7 +356,30 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     }
 
     CompositionLocalProvider(LocalFont provides cfg.font.family) {
-        Box(Modifier.fillMaxSize().background(p.bg)) {
+        val view = LocalView.current
+        SideEffect { launchView = view }
+        LaunchedEffect(resumes) { launching = false }
+        LaunchedEffect(launching) { if (launching) { delay(2500); launching = false } }
+        val zoom by animateFloatAsState(
+            if (launching) 0.9f else 1f,
+            tween(if (launching) 280 else 380, easing = EmphasizedDecel), label = "zoom",
+        )
+        val fade by animateFloatAsState(
+            if (launching) 0f else 1f,
+            tween(if (launching) 220 else 300, easing = EmphasizedDecel), label = "fade",
+        )
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer { scaleX = zoom; scaleY = zoom; alpha = fade }
+                .background(p.bg)
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val d = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        lastTouch = d.position
+                    }
+                },
+        ) {
             Home(
                 p, cfg, favorites, weather, event,
                 onOpenDrawer = { drawerOpen = true },
@@ -1546,6 +1583,7 @@ private fun Chevron(up: Boolean, color: Color) {
  */
 private class ScrollPassthroughFrame(ctx: Context) : android.widget.FrameLayout(ctx) {
     var onScrollBy: (Float) -> Unit = {}
+    var onInnerScroll: (Boolean) -> Unit = {}
     var onFling: (Float) -> Unit = {}
     private val slop = android.view.ViewConfiguration.get(ctx).scaledTouchSlop
     private var downX = 0f
@@ -1581,7 +1619,13 @@ private class ScrollPassthroughFrame(ctx: Context) : android.widget.FrameLayout(
                 downX = ev.x; downY = ev.y; lastY = ev.rawY; scrolling = false
                 tracker?.recycle(); tracker = null
                 track(ev)
+                // Something inside the widget scrolls: give it the whole gesture and park the page.
+                if (scrollableAt(this, downX, downY)) {
+                    onInnerScroll(true)
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                }
             }
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> onInnerScroll(false)
             android.view.MotionEvent.ACTION_MOVE -> {
                 track(ev)
                 val dx = ev.x - downX
@@ -1630,6 +1674,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
     var choosing by remember { mutableStateOf(false) }
     var pending by remember { mutableStateOf(-1) } // widget id waiting on a bind or configure step
     val listState = rememberLazyListState()
+    var innerScrolling by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val fling = ScrollableDefaults.flingBehavior()
 
@@ -1784,7 +1829,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                     modifier = Modifier.padding(top = 8.dp),
                 )
             }
-            LazyColumn(state = listState, contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp)) {
+            LazyColumn(state = listState, userScrollEnabled = !innerScrolling, contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp)) {
                 items(ids, key = { it }) { id ->
                     val info = manager.getAppWidgetInfo(id)
                     if (info == null) {
@@ -1815,6 +1860,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                                     },
                                     update = { v ->
                                         v.onScrollBy = { dy -> listState.dispatchRawDelta(dy) }
+                                        v.onInnerScroll = { innerScrolling = it }
                                         v.onFling = { vy ->
                                             scope.launch { listState.scroll { with(fling) { performFling(vy) } } }
                                         }
