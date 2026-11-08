@@ -80,6 +80,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.NotificationManagerCompat
@@ -300,6 +302,10 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     val pageScope = rememberCoroutineScope()
     val drawerSpec = sp(1f, 650f)
     LaunchedEffect(drawerOpen) { drawerP.animateTo(if (drawerOpen) 1f else 0f, drawerSpec) }
+    // The search page rises from the bottom exactly like the app list: it follows the finger, then settles.
+    val searchP = remember { Animatable(0f) }
+    LaunchedEffect(searchOpen) { searchP.animateTo(if (searchOpen) 1f else 0f, drawerSpec) }
+    val searchVisible by remember { derivedStateOf { searchP.value > 0.001f } }
     val widgetsP = remember { Animatable(0f) }
     LaunchedEffect(widgetsOpen) { widgetsP.animateTo(if (widgetsOpen) 1f else 0f, drawerSpec) }
     val widgetsVisible by remember { derivedStateOf { widgetsP.value > 0.001f } }
@@ -307,9 +313,10 @@ fun LauncherApp(homePress: Int, resumes: Int) {
 
     animationsOn = cfg.animations
     val buzzView = LocalView.current
-    val buzz: () -> Unit = {
-        if (!cfg.noHaptics) buzzView.performHapticFeedback(android.view.HapticFeedbackConstants.GESTURE_START)
+    val buzzWith: (Int) -> Unit = { kind ->
+        if (!cfg.noHaptics) buzzView.performHapticFeedback(kind)
     }
+    val buzz: () -> Unit = { buzzWith(android.view.HapticFeedbackConstants.GESTURE_START) }
     val visibleApps = remember(apps, cfg.hidden) { apps.filter { it.key !in cfg.hidden } }
     var hiddenOpen by remember { mutableStateOf(false) }
 
@@ -455,8 +462,8 @@ fun LauncherApp(homePress: Int, resumes: Int) {
         ) {
             Box(Modifier.fillMaxSize().graphicsLayer {
                 translationX = widgetsP.value * size.width * 0.22f - (if (cfg.drawerRight) drawerP.value * size.width * 0.22f else 0f)
-                translationY = if (cfg.drawerRight) 0f else -drawerP.value * size.height * 0.22f
-                alpha = (1f - drawerP.value - widgetsP.value).coerceIn(0f, 1f)
+                translationY = -((if (cfg.drawerRight) 0f else drawerP.value) + searchP.value) * size.height * 0.22f
+                alpha = (1f - drawerP.value - widgetsP.value - searchP.value).coerceIn(0f, 1f)
             }) {
             Home(
                 p, cfg, favorites, weather, event,
@@ -467,9 +474,18 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     drawerOpen = open
                     pageScope.launch { drawerP.animateTo(if (open) 1f else 0f, drawerSpec, initialVelocity = 0f) }
                 },
-                drawerProgress = { drawerP.value },
+                drawerProgress = { maxOf(drawerP.value, searchP.value) },
                 onOpenSearch = { searchOpen = true },
-                onSettings = { settingsOpen = true },
+                onSearchDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { searchP.snapTo(f.coerceIn(0f, 1f)) } },
+                onSearchEnd = { velocity ->
+                    val open = if (velocity < -150f) true else if (velocity > 150f) false else searchP.value > 0.1f
+                    searchOpen = open
+                    pageScope.launch { searchP.animateTo(if (open) 1f else 0f, drawerSpec) }
+                },
+                onSettings = {
+                    buzzWith(android.view.HapticFeedbackConstants.LONG_PRESS)
+                    settingsOpen = true
+                },
                 onSleep = { globalAction(ctx, AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN) },
                 onNotifications = { globalAction(ctx, AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS) },
                 gesturesEnabled = !drawerOpen && !settingsOpen && !searchOpen && !widgetsOpen,
@@ -527,12 +543,24 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     )
                 }
             }
-            AnimatedVisibility(
-                visible = searchOpen,
-                enter = screenEnter(),
-                exit = screenExit(),
-            ) {
-                SearchScreen(p, cfg, visibleApps, onClose = { searchOpen = false })
+            if (searchVisible) {
+                Box(Modifier.fillMaxSize().graphicsLayer {
+                    translationY = (1f - searchP.value) * size.height
+                    alpha = (searchP.value * 1.6f).coerceIn(0f, 1f)
+                }) {
+                    SearchScreen(
+                        p, cfg, visibleApps,
+                        active = searchOpen,
+                        onClose = { searchOpen = false },
+                        onDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { searchP.snapTo(f.coerceIn(0f, 1f)) } },
+                        onEnd = { v ->
+                            // v is toward-closed positive (down)
+                            val open = if (v > 150f) false else if (v < -150f) true else searchP.value > 0.9f
+                            searchOpen = open
+                            pageScope.launch { searchP.animateTo(if (open) 1f else 0f, drawerSpec) }
+                        },
+                    )
+                }
             }
             AnimatedVisibility(
                 visible = settingsOpen,
@@ -657,6 +685,8 @@ private fun Home(
     onDrawerEnd: (Float) -> Unit,
     drawerProgress: () -> Float,
     onOpenSearch: () -> Unit,
+    onSearchDrag: (Float) -> Unit,
+    onSearchEnd: (Float) -> Unit,
     onSettings: () -> Unit,
     onSleep: () -> Unit,
     onNotifications: () -> Unit,
@@ -678,7 +708,8 @@ private fun Home(
     val curDrawer by rememberUpdatedState(onOpenDrawer)
     val curWDrag by rememberUpdatedState(onWidgetsDrag)
     val curWEnd by rememberUpdatedState(onWidgetsEnd)
-    val curSearch by rememberUpdatedState(onOpenSearch)
+    val curSDrag by rememberUpdatedState(onSearchDrag)
+    val curSEnd by rememberUpdatedState(onSearchEnd)
     val curBuzz by rememberUpdatedState(onBuzz)
     val rt = remember { RootTracker() }
     val curDrag by rememberUpdatedState(onDrawerDrag)
@@ -713,7 +744,7 @@ private fun Home(
                     var dy = 0f
                     var held = false
                     val slop = 3.dp.toPx()
-                    var axis = 0 // 0 = undecided, 1 = pulling the app list up, 2 = pulling the widgets page in
+                    var axis = 0 // 0 = undecided, 1 = pulling the app list, 2 = pulling the widgets page in, 3 = pulling search up
                     var swallow = false
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -727,6 +758,7 @@ private fun Home(
                             change.consume() // the rest of this gesture belongs to the swipe, not the app under it
                             if (axis == 1) curDrag(if (cfg.drawerRight) -dx / size.width.toFloat() else -dy / size.height.toFloat())
                             if (axis == 2) curWDrag(dx / size.width.toFloat())
+                            if (axis == 3) curSDrag(-dy / size.height.toFloat())
                             continue
                         }
                         // A press-and-hold is a long press (Settings), not a swipe.
@@ -737,11 +769,11 @@ private fun Home(
                             change.consume()
                             curBuzz()
                             curDrag(-dy / size.height.toFloat())
-                        } else if (cfg.drawerRight && cfg.swipeUpSearch && -dy > slop * 2f && -dy > 1.2f * abs(dx)) {
+                        } else if (cfg.drawerRight && cfg.swipeUpSearch && -dy > slop && -dy > 0.9f * abs(dx)) {
+                            axis = 3
                             change.consume()
                             curBuzz()
-                            curSearch()
-                            swallow = true
+                            curSDrag(-dy / size.height.toFloat())
                         } else if (cfg.drawerRight && -dx > slop && -dx > 0.7f * abs(dy)) {
                             axis = 1
                             change.consume()
@@ -761,6 +793,7 @@ private fun Home(
                     }
                     if (axis == 1) curEnd(if (cfg.drawerRight) tracker.calculateVelocity().x else tracker.calculateVelocity().y)
                     if (axis == 2) curWEnd(tracker.calculateVelocity().x)
+                    if (axis == 3) curSEnd(tracker.calculateVelocity().y)
                 }
             }
             .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
@@ -935,32 +968,11 @@ private fun Drawer(
             .padding(horizontal = 32.dp),
     ) {
         Spacer(Modifier.height(24.dp))
-        Pill(p) {
-            SearchIcon(p.accent)
-            Spacer(Modifier.width(12.dp))
-            BasicTextField(
-                value = query,
-                onValueChange = { query = it },
-                singleLine = true,
-                textStyle = ts(p.ink, 16.sp, FontWeight.Normal),
-                cursorBrush = SolidColor(p.accent),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { shown.firstOrNull()?.let(onLaunch) }),
-                modifier = Modifier.weight(1f),
-                decorationBox = { inner ->
-                    Box(contentAlignment = Alignment.CenterStart) {
-                        if (query.isEmpty()) BasicText(if (asApps) "Search apps" else "Search anything", style = ts(p.muted, 16.sp, FontWeight.Normal))
-                        inner()
-                    }
-                },
-            )
-        }
-        Spacer(Modifier.height(8.dp))
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 Modifier.fillMaxSize(),
                 state = listState,
-                contentPadding = PaddingValues(end = 28.dp, bottom = 24.dp),
+                contentPadding = PaddingValues(end = 28.dp, bottom = 8.dp),
             ) {
                 groups.forEach { (letter, list) ->
                     stickyHeader(key = "h$letter", contentType = "header") {
@@ -1036,14 +1048,50 @@ private fun Drawer(
                 }
             }
         }
+        Spacer(Modifier.height(8.dp))
+        Pill(p) {
+            SearchIcon(p.accent)
+            Spacer(Modifier.width(12.dp))
+            BasicTextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                textStyle = ts(p.ink, 16.sp, FontWeight.Normal),
+                cursorBrush = SolidColor(p.accent),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { shown.firstOrNull()?.let(onLaunch) }),
+                modifier = Modifier.weight(1f),
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) BasicText(if (asApps) "Search apps" else "Search anything", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                        inner()
+                    }
+                },
+            )
+        }
+        Spacer(Modifier.height(24.dp))
     }
 }
 
 // ---------- Universal search ----------
 
 @Composable
-private fun SearchScreen(p: Palette, cfg: Config, apps: List<App>, onClose: () -> Unit) {
+private fun SearchScreen(
+    p: Palette,
+    cfg: Config,
+    apps: List<App>,
+    active: Boolean,
+    onClose: () -> Unit,
+    onDrag: (Float) -> Unit,
+    onEnd: (Float) -> Unit,
+) {
     val ctx = LocalContext.current
+    val curDragSearch by rememberUpdatedState(onDrag)
+    val curEndSearch by rememberUpdatedState(onEnd)
+    val rt = remember { RootTracker() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val listState = rememberLazyListState()
     var query by remember { mutableStateOf("") }
     var contacts by remember { mutableStateOf(emptyList<ContactHit>()) }
     var files by remember { mutableStateOf(emptyList<FileHit>()) }
@@ -1055,7 +1103,16 @@ private fun SearchScreen(p: Palette, cfg: Config, apps: List<App>, onClose: () -
         else apps.filter { it.label.contains(q, ignoreCase = true) }.take(6)
     }
 
-    LaunchedEffect(Unit) { focus.requestFocus() }
+    // Keyboard comes up once the page has settled, and goes away as soon as it is being dismissed.
+    LaunchedEffect(active) {
+        if (active) {
+            delay(60)
+            try { focus.requestFocus() } catch (_: Exception) { }
+        } else {
+            keyboard?.hide()
+            focusManager.clearFocus()
+        }
+    }
     LaunchedEffect(q, cfg.searchContacts, cfg.searchFiles) {
         if (q.isEmpty()) {
             contacts = emptyList()
@@ -1073,18 +1130,41 @@ private fun SearchScreen(p: Palette, cfg: Config, apps: List<App>, onClose: () -
         Modifier
             .fillMaxSize()
             .background(p.bg)
+            .onGloballyPositioned { rt.coords = it }
+            // Drag the page back down. It follows the finger, and a flick closes it. Only starts when the
+            // results are scrolled to the top, so scrolling the list is unaffected.
+            .pointerInput(listState) {
+                val slop = 3.dp.toPx()
+                awaitEachGesture {
+                    val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val startedAtTop = !listState.canScrollBackward
+                    val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
+                    val r0 = rt.toRoot(first.position)
+                    tracker.addPosition(first.uptimeMillis, r0)
+                    var pulling = false
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == first.id } ?: break
+                        if (!change.pressed) break
+                        val r = rt.toRoot(change.position)
+                        tracker.addPosition(change.uptimeMillis, r)
+                        val dx = r.x - r0.x
+                        val dy = r.y - r0.y
+                        if (!pulling && startedAtTop && dy > slop && dy > 0.9f * abs(dx)) {
+                            pulling = true
+                            keyboard?.hide()
+                        }
+                        if (pulling) {
+                            change.consume()
+                            curDragSearch(1f - dy / size.height)
+                        }
+                    }
+                    if (pulling) curEndSearch(tracker.calculateVelocity().y)
+                }
+            }
             .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
             .imePadding()
-            .padding(horizontal = 32.dp)
-            .pointerInput(Unit) {
-                var total = 0f
-                detectVerticalDragGestures(
-                    onDragStart = { total = 0f },
-                    onDragEnd = { if (total > 120f) onClose() },
-                    onDragCancel = {},
-                    onVerticalDrag = { _, dy -> total += dy },
-                )
-            },
+            .padding(horizontal = 32.dp),
     ) {
         Spacer(Modifier.height(24.dp))
         Pill(p) {
@@ -1116,7 +1196,7 @@ private fun SearchScreen(p: Palette, cfg: Config, apps: List<App>, onClose: () -
                 },
             )
         }
-        LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 24.dp)) {
             if (q.isEmpty()) {
                 item {
                     val sources = listOfNotNull(
