@@ -420,11 +420,13 @@ internal fun AppRow(
     weight: FontWeight = FontWeight.Light,
     marker: Color? = null,
     modifier: Modifier = Modifier,
+    // Home keeps the tap target on the name only; lists (drawer, search, pickers) use the whole row.
+    fullWidth: Boolean = false,
 ) {
-    // No fillMaxWidth: only the app name itself (and its dot) is tappable, not the empty space beside it.
     Row(
         modifier
-            .heightIn(min = 48.dp)
+            .then(if (fullWidth) Modifier.fillMaxWidth() else Modifier)
+            .heightIn(min = if (fullWidth) 56.dp else 48.dp)
             .softCombined(onClick = onClick, onLongClick = onLongClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -503,7 +505,7 @@ internal fun AppPicker(p: Palette, slot: Slot, apps: List<App>, onPick: (App?) -
                 )
             }
             items(apps, key = { it.key }) { app ->
-                AppRow(app, 22.sp, p.ink, onClick = { onPick(app) })
+                AppRow(app, 22.sp, p.ink, onClick = { onPick(app) }, fullWidth = true)
             }
         }
     }

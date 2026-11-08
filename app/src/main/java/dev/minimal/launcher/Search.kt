@@ -301,7 +301,7 @@ internal fun SearchScreen(
                 if (appHits.isNotEmpty()) {
                     item { SectionTitle("Apps", p) }
                     items(appHits, key = { "app" + it.key }) { app ->
-                        AppRow(app, 22.sp, p.ink, onClick = { openApp(ctx, app); onClose() })
+                        AppRow(app, 22.sp, p.ink, onClick = { openApp(ctx, app); onClose() }, fullWidth = true)
                     }
                 }
                 if (contacts.isNotEmpty()) {
