@@ -344,6 +344,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     LaunchedEffect(drawerOpen, settingsOpen, searchOpen, homePress) {
         apps = withContext(Dispatchers.Default) { loadApps(ctx) }
     }
+    var menuApp by remember { mutableStateOf<App?>(null) }
     LaunchedEffect(homePress) { menuApp = null; drawerOpen = false; settingsOpen = false; searchOpen = false; pickSlot = null; widgetsOpen = false }
     // Hide or show the system status bar.
     val view = LocalView.current
@@ -409,7 +410,6 @@ fun LauncherApp(homePress: Int, resumes: Int) {
         favKeys = next
         writeFavs(ctx, next)
     }
-    var menuApp by remember { mutableStateOf<App?>(null) }
     val togglePin: (App) -> Unit = { app ->
         val current = favorites.map { it.key }
         val pinned = app.key in current
