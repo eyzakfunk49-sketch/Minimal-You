@@ -383,6 +383,12 @@ internal fun SettingsScreen(
 
                         SettingsPage.HOME -> {
                             settingsBlock {
+                                SettingsGroup(p, "Alignment") {
+                                    HomeAlign.entries.forEach { a -> OptionRow(a.label, a == cfg.homeAlign, p) { onConfig(cfg.copy(homeAlign = a)) } }
+                                }
+                                Caption(p, "Where the date, clock, weather and favorites sit on Home.")
+                            }
+                            settingsBlock {
                                 SettingsGroup(p, "Clock style") {
                                     SwitchRow("Show clock", cfg.showClock, p) { onConfig(cfg.copy(showClock = it)) }
                                     ClockStyle.entries.forEach { s -> OptionRow(s.label, s == cfg.clock, p) { onConfig(cfg.copy(clock = s)) } }

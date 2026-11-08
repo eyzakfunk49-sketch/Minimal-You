@@ -80,6 +80,10 @@ enum class ClockStyle(val label: String) {
     LARGE("Large"), BOLD("Bold"), COMPACT("Compact"), STACKED("Stacked"),
 }
 
+enum class HomeAlign(val label: String) {
+    LEFT("Left"), CENTER("Center"), RIGHT("Right"),
+}
+
 enum class HourFormat(val label: String) {
     SYSTEM("Follow system"), H12("12-hour"), H24("24-hour"),
 }
@@ -128,6 +132,7 @@ data class Config(
     val hideStatusBar: Boolean = false,
     val showBattery: Boolean = true,
     val showClock: Boolean = true,
+    val homeAlign: HomeAlign = HomeAlign.LEFT,
     val animations: Boolean = true,
     val drawerRight: Boolean = false,
     val swipeUpSearch: Boolean = false,
@@ -170,6 +175,7 @@ fun loadConfig(ctx: Context): Config {
         hideStatusBar = p.getBoolean("hideStatusBar", false),
         showBattery = p.getBoolean("showBattery", true),
         showClock = p.getBoolean("showClock", true),
+        homeAlign = p.readEnum("homeAlign", HomeAlign.LEFT),
         animations = p.getBoolean("animations", true),
         drawerRight = p.getBoolean("drawerRight", false),
         swipeUpSearch = p.getBoolean("swipeUpSearch", false),
@@ -204,6 +210,7 @@ fun saveConfig(ctx: Context, c: Config) {
         .putBoolean("hideStatusBar", c.hideStatusBar)
         .putBoolean("showBattery", c.showBattery)
         .putBoolean("showClock", c.showClock)
+        .putString("homeAlign", c.homeAlign.name)
         .putBoolean("animations", c.animations)
         .putBoolean("drawerRight", c.drawerRight)
         .putBoolean("swipeUpSearch", c.swipeUpSearch)

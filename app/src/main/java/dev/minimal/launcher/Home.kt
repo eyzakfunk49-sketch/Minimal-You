@@ -143,15 +143,21 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 // ---------- Home ----------
 
+internal fun HomeAlign.horizontal(): Alignment.Horizontal = when (this) {
+    HomeAlign.LEFT -> Alignment.Start
+    HomeAlign.CENTER -> Alignment.CenterHorizontally
+    HomeAlign.RIGHT -> Alignment.End
+}
+
 @Composable
-internal fun ClockText(p: Palette, style: ClockStyle, now: LocalDateTime, is24: Boolean) {
+internal fun ClockText(p: Palette, style: ClockStyle, now: LocalDateTime, is24: Boolean, align: Alignment.Horizontal = Alignment.Start) {
     fun f(pattern: String): String = now.format(DateTimeFormatter.ofPattern(pattern))
     val hm = f(if (is24) "H:mm" else "h:mm")
     when (style) {
         ClockStyle.LARGE -> BasicText(hm, style = ts(p.ink, 96.sp, FontWeight.Light, (-4).sp, 104.sp))
         ClockStyle.BOLD -> BasicText(hm, style = ts(p.ink, 96.sp, FontWeight.Bold, (-4).sp, 104.sp))
         ClockStyle.COMPACT -> BasicText(hm, style = ts(p.ink, 48.sp, FontWeight.Normal, (-1).sp, 56.sp))
-        ClockStyle.STACKED -> Column {
+        ClockStyle.STACKED -> Column(horizontalAlignment = align) {
             BasicText(f(if (is24) "HH" else "hh"), style = ts(p.ink, 88.sp, FontWeight.Light, (-2).sp, 84.sp))
             BasicText(f("mm"), style = ts(p.accent, 88.sp, FontWeight.Light, (-2).sp, 84.sp))
         }
@@ -324,9 +330,11 @@ internal fun Home(
             }
             .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
             .padding(horizontal = 32.dp),
+        // Everything on Home lines up to the side chosen in Settings.
+        horizontalAlignment = cfg.homeAlign.horizontal(),
     ) {
         Spacer(Modifier.height(64.dp))
-        Column(Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = cfg.homeAlign.horizontal()) {
             val datePattern = cfg.date.pattern
             if (datePattern != null) {
                 BasicText(
@@ -340,7 +348,7 @@ internal fun Home(
             }
             if (cfg.showClock) {
                 Box(Modifier.softClick(role = Role.Button) { onSlot(Slot.CLOCK) }) {
-                    ClockText(p, cfg.clock, now, is24)
+                    ClockText(p, cfg.clock, now, is24, cfg.homeAlign.horizontal())
                 }
             }
             if (weather != null || showBatteryLine) {
