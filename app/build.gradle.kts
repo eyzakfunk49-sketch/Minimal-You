@@ -26,6 +26,14 @@ android {
         }
     }
     buildTypes {
+        // Debug builds are the ones you install, so make them run like a real release: not debuggable and
+        // optimized by R8. Compose is far smoother this way, especially when scrolling.
+        debug {
+            isDebuggable = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
