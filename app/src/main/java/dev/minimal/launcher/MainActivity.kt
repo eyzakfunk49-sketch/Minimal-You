@@ -294,6 +294,9 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     val drawerVisible by remember { derivedStateOf { drawerP.value > 0.001f } }
 
     animationsOn = cfg.animations
+    val buzz: () -> Unit = {
+        if (!cfg.noHaptics) view.performHapticFeedback(android.view.HapticFeedbackConstants.GESTURE_START)
+    }
     val visibleApps = remember(apps, cfg.hidden) { apps.filter { it.key !in cfg.hidden } }
     var hiddenOpen by remember { mutableStateOf(false) }
 
@@ -422,7 +425,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                 onOpenDrawer = { drawerOpen = true },
                 onDrawerDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { drawerP.snapTo(f.coerceIn(0f, 1f)) } },
                 onDrawerEnd = { velocity ->
-                    val open = if (velocity < -450f) true else if (velocity > 450f) false else drawerP.value > 0.3f
+                    val open = if (velocity < -150f) true else if (velocity > 150f) false else drawerP.value > 0.1f
                     drawerOpen = open
                     pageScope.launch { drawerP.animateTo(if (open) 1f else 0f, drawerSpec, initialVelocity = 0f) }
                 },
@@ -434,10 +437,11 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                 gesturesEnabled = !drawerOpen && !settingsOpen && !searchOpen && !widgetsOpen,
                 onLaunch = { openApp(ctx, it) },
                 onSlot = openSlot,
+                onBuzz = buzz,
                 onOpenWidgets = { widgetsOpen = true },
                 onWidgetsDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { widgetsP.snapTo(f.coerceIn(0f, 1f)) } },
                 onWidgetsEnd = { v ->
-                    val open = if (v > 450f) true else if (v < -450f) false else widgetsP.value > 0.4f
+                    val open = if (v > 150f) true else if (v < -150f) false else widgetsP.value > 0.1f
                     widgetsOpen = open
                     pageScope.launch { widgetsP.animateTo(if (open) 1f else 0f, drawerSpec) }
                 },
@@ -453,7 +457,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                         onClose = { widgetsOpen = false },
                         onDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { widgetsP.snapTo(f.coerceIn(0f, 1f)) } },
                         onEnd = { v ->
-                            val open = if (v > 450f) true else if (v < -450f) false else widgetsP.value > 0.4f
+                            val open = if (v > 150f) true else if (v < -150f) false else widgetsP.value > 0.9f
                             widgetsOpen = open
                             pageScope.launch { widgetsP.animateTo(if (open) 1f else 0f, drawerSpec) }
                         },
@@ -478,7 +482,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                         onDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { drawerP.snapTo(f.coerceIn(0f, 1f)) } },
                         onEnd = { v ->
                             // v is toward-closed positive (down / right)
-                            val open = if (v > 450f) false else if (v < -450f) true else drawerP.value > 0.7f
+                            val open = if (v > 150f) false else if (v < -150f) true else drawerP.value > 0.9f
                             drawerOpen = open
                             pageScope.launch { drawerP.animateTo(if (open) 1f else 0f, drawerSpec) }
                         },
@@ -486,8 +490,8 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                 }
             }
             // Let swipes that start at the very edge reach us instead of triggering the system back gesture.
-            Box(Modifier.align(Alignment.CenterStart).width(36.dp).height(200.dp).systemGestureExclusion())
-            Box(Modifier.align(Alignment.CenterEnd).width(36.dp).height(200.dp).systemGestureExclusion())
+            Box(Modifier.align(androidx.compose.ui.BiasAlignment(-1f, 0.3f)).width(36.dp).height(200.dp).systemGestureExclusion())
+            Box(Modifier.align(androidx.compose.ui.BiasAlignment(1f, 0.3f)).width(36.dp).height(200.dp).systemGestureExclusion())
             AnimatedVisibility(
                 visible = searchOpen,
                 enter = screenEnter(),
@@ -624,6 +628,7 @@ private fun Home(
     gesturesEnabled: Boolean,
     onLaunch: (App) -> Unit,
     onSlot: (Slot) -> Unit,
+    onBuzz: () -> Unit,
     onOpenWidgets: () -> Unit,
     onWidgetsDrag: (Float) -> Unit,
     onWidgetsEnd: (Float) -> Unit,
@@ -638,6 +643,8 @@ private fun Home(
     val curDrawer by rememberUpdatedState(onOpenDrawer)
     val curWDrag by rememberUpdatedState(onWidgetsDrag)
     val curWEnd by rememberUpdatedState(onWidgetsEnd)
+    val curSearch by rememberUpdatedState(onOpenSearch)
+    val curBuzz by rememberUpdatedState(onBuzz)
     val curDrag by rememberUpdatedState(onDrawerDrag)
     val curEnd by rememberUpdatedState(onDrawerEnd)
     val curNotifications by rememberUpdatedState(onNotifications)
@@ -657,7 +664,7 @@ private fun Home(
             // One detector for all swipes so they can't steal from each other:
             // down = notifications, up = app list, right = widgets page (if enabled).
             // It watches without consuming and fires as soon as the swipe is clearly intentional.
-            .pointerInput(gesturesEnabled, cfg.widgetsOn, cfg.drawerRight) {
+            .pointerInput(gesturesEnabled, cfg.widgetsOn, cfg.drawerRight, cfg.swipeUpSearch) {
                 if (!gesturesEnabled) return@pointerInput
                 awaitEachGesture {
                     val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -667,7 +674,7 @@ private fun Home(
                     var dx = 0f
                     var dy = 0f
                     var held = false
-                    val slop = 6.dp.toPx()
+                    val slop = 3.dp.toPx()
                     var axis = 0 // 0 = undecided, 1 = pulling the app list up, 2 = pulling the widgets page in
                     var swallow = false
                     while (true) {
@@ -687,20 +694,29 @@ private fun Home(
                         // A press-and-hold is a long press (Settings), not a swipe.
                         if (change.uptimeMillis - startTime >= 450L && abs(dx) + abs(dy) < 24f) held = true
                         if (held) continue
-                        if (!cfg.drawerRight && -dy > slop && -dy > 0.9f * abs(dx)) {
+                        if (!cfg.drawerRight && -dy > slop && -dy > 0.7f * abs(dx)) {
                             axis = 1
                             change.consume()
+                            curBuzz()
                             curDrag(-dy / size.height.toFloat())
-                        } else if (cfg.drawerRight && -dx > slop && -dx > 0.9f * abs(dy)) {
+                        } else if (cfg.drawerRight && cfg.swipeUpSearch && -dy > slop * 2f && -dy > 1.2f * abs(dx)) {
+                            change.consume()
+                            curBuzz()
+                            curSearch()
+                            swallow = true
+                        } else if (cfg.drawerRight && -dx > slop && -dx > 0.7f * abs(dy)) {
                             axis = 1
                             change.consume()
+                            curBuzz()
                             curDrag(-dx / size.width.toFloat())
-                        } else if (cfg.widgetsOn && dx > slop && dx > 0.9f * abs(dy)) {
+                        } else if (cfg.widgetsOn && dx > slop && dx > 0.7f * abs(dy)) {
                             axis = 2
                             change.consume()
+                            curBuzz()
                             curWDrag(dx / size.width.toFloat())
-                        } else if (dy > slop * 2.5f && dy > abs(dx)) {
+                        } else if (dy > slop * 4f && dy > abs(dx)) {
                             change.consume()
+                            curBuzz()
                             curNotifications()
                             swallow = true
                         }
@@ -837,7 +853,7 @@ private fun Drawer(
             // the finger. Starts only when the list is at its top (bottom mode), so scrolling is unaffected.
             .pointerInput(listState, letters.size, fromRight) {
                 val stripPx = 60.dp.toPx()
-                val slop = 6.dp.toPx()
+                val slop = 3.dp.toPx()
                 awaitEachGesture {
                     val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     val startedAtTop = !listState.canScrollBackward
@@ -856,8 +872,8 @@ private fun Drawer(
                         dx += delta.x
                         dy += delta.y
                         if (!pulling && !inStrip) {
-                            pulling = if (fromRight) dx > slop && dx > 1.1f * abs(dy)
-                            else startedAtTop && dy > slop && dy > 1.2f * abs(dx)
+                            pulling = if (fromRight) dx > slop && dx > 0.8f * abs(dy)
+                            else startedAtTop && dy > slop && dy > 0.9f * abs(dx)
                         }
                         if (pulling) {
                             change.consume()
@@ -1294,6 +1310,9 @@ private fun SettingsScreen(
             item { SectionTitle("All apps panel", p) }
             item { OptionRow("From the bottom (swipe up)", !cfg.drawerRight, p) { onConfig(cfg.copy(drawerRight = false)) } }
             item { OptionRow("From the right (swipe left)", cfg.drawerRight, p) { onConfig(cfg.copy(drawerRight = true)) } }
+            if (cfg.drawerRight) {
+                item { SwitchRow("Swipe up to start search", cfg.swipeUpSearch, p) { onConfig(cfg.copy(swipeUpSearch = it)) } }
+            }
             item {
                 Row(
                     Modifier
@@ -1314,8 +1333,9 @@ private fun SettingsScreen(
             }
 
             // Animations
-            item { SectionTitle("Animations", p) }
+            item { SectionTitle("Animations and feedback", p) }
             item { SwitchRow("Animations", cfg.animations, p) { onConfig(cfg.copy(animations = it)) } }
+            item { SwitchRow("Disable vibration feedback", cfg.noHaptics, p) { onConfig(cfg.copy(noHaptics = it)) } }
 
             // Wallpaper
             item { SectionTitle("Wallpaper", p) }
@@ -1469,7 +1489,7 @@ private fun SettingsScreen(
             item { SectionTitle("Gestures", p) }
             item {
                 BasicText(
-                    "On Home: double tap a blank spot to sleep, long-press it to open Settings, swipe down for notifications, swipe ${if (cfg.drawerRight) "left" else "up"} for your apps. Sleep and notifications need the MinimalYou gestures accessibility service.",
+                    "On Home: double tap a blank spot to sleep, long-press it to open Settings, swipe down for notifications, swipe ${if (cfg.drawerRight) "left" else "up"} for your apps${if (cfg.drawerRight && cfg.swipeUpSearch) ", swipe up to search" else ""}. Sleep and notifications need the MinimalYou gestures accessibility service.",
                     style = ts(p.muted, 15.sp, FontWeight.Normal),
                 )
             }
@@ -2062,7 +2082,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> Un
                             tracker.addPosition(change.uptimeMillis, change.position)
                             val d = change.positionChange()
                             dx += d.x; dy += d.y
-                            if (!pulling && !innerScrolling && dx < -6.dp.toPx() && abs(dx) > 1.1f * abs(dy)) pulling = true
+                            if (!pulling && !innerScrolling && dx < -3.dp.toPx() && abs(dx) > 0.8f * abs(dy)) pulling = true
                             if (pulling) {
                                 change.consume()
                                 curDrag(1f + dx / size.width.toFloat())

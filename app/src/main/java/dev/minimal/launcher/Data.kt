@@ -129,6 +129,8 @@ data class Config(
     val showBattery: Boolean = true,
     val animations: Boolean = true,
     val drawerRight: Boolean = false,
+    val swipeUpSearch: Boolean = false,
+    val noHaptics: Boolean = false,
     val hidden: Set<String> = emptySet(),
 )
 
@@ -168,6 +170,8 @@ fun loadConfig(ctx: Context): Config {
         showBattery = p.getBoolean("showBattery", true),
         animations = p.getBoolean("animations", true),
         drawerRight = p.getBoolean("drawerRight", false),
+        swipeUpSearch = p.getBoolean("swipeUpSearch", false),
+        noHaptics = p.getBoolean("noHaptics", false),
         hidden = p.getStringSet("hidden", emptySet())?.toSet() ?: emptySet(),
     )
 }
@@ -199,6 +203,8 @@ fun saveConfig(ctx: Context, c: Config) {
         .putBoolean("showBattery", c.showBattery)
         .putBoolean("animations", c.animations)
         .putBoolean("drawerRight", c.drawerRight)
+        .putBoolean("swipeUpSearch", c.swipeUpSearch)
+        .putBoolean("noHaptics", c.noHaptics)
         .putStringSet("hidden", c.hidden)
         .apply()
 }
