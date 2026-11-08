@@ -10,6 +10,10 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Typeface
 import android.net.Uri
+import android.location.LocationManager
+import kotlin.coroutines.resume
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import android.os.Bundle
 import android.os.Environment
 import android.provider.CalendarContract
@@ -112,6 +116,9 @@ data class Config(
     val clockApp: String = "",
     val calendarApp: String = "",
     val weatherApp: String = "",
+    val weatherLocation: Boolean = false,
+    val widgetsOn: Boolean = false,
+    val notifDots: Boolean = true,
 )
 
 fun appPrefs(ctx: Context): SharedPreferences =
@@ -143,6 +150,9 @@ fun loadConfig(ctx: Context): Config {
         clockApp = p.getString("clockApp", "") ?: "",
         calendarApp = p.getString("calendarApp", "") ?: "",
         weatherApp = p.getString("weatherApp", "") ?: "",
+        weatherLocation = p.getBoolean("weatherLocation", false),
+        widgetsOn = p.getBoolean("widgetsOn", false),
+        notifDots = p.getBoolean("notifDots", true),
     )
 }
 
@@ -166,6 +176,9 @@ fun saveConfig(ctx: Context, c: Config) {
         .putString("clockApp", c.clockApp)
         .putString("calendarApp", c.calendarApp)
         .putString("weatherApp", c.weatherApp)
+        .putBoolean("weatherLocation", c.weatherLocation)
+        .putBoolean("widgetsOn", c.widgetsOn)
+        .putBoolean("notifDots", c.notifDots)
         .apply()
 }
 
@@ -207,6 +220,33 @@ fun geocode(name: String): Triple<String, Double, Double>? {
         Triple(o.optString("name", name), o.getDouble("latitude"), o.getDouble("longitude"))
     } catch (e: Exception) {
         null
+    }
+}
+
+/** Approximate device location, or null if there is no permission or no fix. Never leaves the phone except as coordinates sent to Open-Meteo. */
+suspend fun currentLatLon(ctx: Context): Pair<Double, Double>? {
+    if (ctx.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) return null
+    val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    val providers = try { lm.getProviders(true) } catch (e: Exception) { emptyList() }
+    var best: android.location.Location? = null
+    for (provider in providers) {
+        val loc = try { lm.getLastKnownLocation(provider) } catch (e: Exception) { null } ?: continue
+        val cur = best
+        if (cur == null || loc.time > cur.time) best = loc
+    }
+    val found = best
+    if (found != null) return found.latitude to found.longitude
+    val provider = providers.firstOrNull() ?: return null
+    return withTimeoutOrNull(10_000L) {
+        suspendCancellableCoroutine<Pair<Double, Double>?> { cont ->
+            try {
+                lm.getCurrentLocation(provider, null, ctx.mainExecutor) { loc ->
+                    if (cont.isActive) cont.resume(loc?.let { it.latitude to it.longitude })
+                }
+            } catch (e: Exception) {
+                if (cont.isActive) cont.resume(null)
+            }
+        }
     }
 }
 

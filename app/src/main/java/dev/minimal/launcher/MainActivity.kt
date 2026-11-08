@@ -27,6 +27,22 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import android.app.Activity
+import android.appwidget.AppWidgetHost
+import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProviderInfo
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -205,6 +221,7 @@ fun LauncherApp(homePress: Int) {
     var settingsOpen by remember { mutableStateOf(false) }
     var searchOpen by remember { mutableStateOf(false) }
     var pickSlot by remember { mutableStateOf<Slot?>(null) }
+    var widgetsOpen by remember { mutableStateOf(false) }
 
     val updateCfg: (Config) -> Unit = { next ->
         cfg = next
@@ -214,20 +231,24 @@ fun LauncherApp(homePress: Int) {
     LaunchedEffect(drawerOpen, settingsOpen, searchOpen, homePress) {
         apps = withContext(Dispatchers.Default) { loadApps(ctx) }
     }
-    LaunchedEffect(homePress) { drawerOpen = false; settingsOpen = false; searchOpen = false; pickSlot = null }
+    LaunchedEffect(homePress) { drawerOpen = false; settingsOpen = false; searchOpen = false; pickSlot = null; widgetsOpen = false }
     BackHandler(enabled = drawerOpen) { drawerOpen = false }
+    BackHandler(enabled = widgetsOpen) { widgetsOpen = false }
     BackHandler(enabled = searchOpen) { searchOpen = false }
     BackHandler(enabled = settingsOpen) { settingsOpen = false }
     BackHandler(enabled = pickSlot != null) { pickSlot = null } // registered last = handled first
 
-    // Weather: refresh every 30 minutes while a city is set.
-    LaunchedEffect(cfg.weatherOn, cfg.city, cfg.lat, cfg.lon, cfg.fahrenheit) {
-        if (!cfg.weatherOn || cfg.city.isBlank()) {
+    // Weather: refresh every 30 minutes (every minute until the first success).
+    LaunchedEffect(cfg.weatherOn, cfg.weatherLocation, cfg.city, cfg.lat, cfg.lon, cfg.fahrenheit) {
+        if (!cfg.weatherOn || (!cfg.weatherLocation && cfg.city.isBlank())) {
             weather = null
             return@LaunchedEffect
         }
         while (true) {
-            val w = withContext(Dispatchers.IO) { fetchWeather(cfg.lat, cfg.lon, cfg.fahrenheit) }
+            val pos = if (cfg.weatherLocation) currentLatLon(ctx) else (cfg.lat to cfg.lon)
+            val w = if (pos != null) {
+                withContext(Dispatchers.IO) { fetchWeather(pos.first, pos.second, cfg.fahrenheit) }
+            } else null
             if (w != null) {
                 weather = w
                 delay(30 * 60 * 1000L)
@@ -286,10 +307,18 @@ fun LauncherApp(homePress: Int) {
                 onSettings = { settingsOpen = true },
                 onSleep = { globalAction(ctx, AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN) },
                 onNotifications = { globalAction(ctx, AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS) },
-                gesturesEnabled = !drawerOpen && !settingsOpen && !searchOpen,
+                gesturesEnabled = !drawerOpen && !settingsOpen && !searchOpen && !widgetsOpen,
                 onLaunch = { openApp(ctx, it) },
                 onSlot = openSlot,
+                onOpenWidgets = { widgetsOpen = true },
             )
+            AnimatedVisibility(
+                visible = widgetsOpen,
+                enter = slideInHorizontally { -it } + fadeIn(),
+                exit = slideOutHorizontally { -it } + fadeOut(),
+            ) {
+                WidgetsScreen(p, onClose = { widgetsOpen = false })
+            }
             AnimatedVisibility(
                 visible = drawerOpen,
                 enter = slideInVertically { it / 3 } + fadeIn(),
@@ -385,6 +414,7 @@ private fun Home(
     gesturesEnabled: Boolean,
     onLaunch: (App) -> Unit,
     onSlot: (Slot) -> Unit,
+    onOpenWidgets: () -> Unit,
 ) {
     val ctx = LocalContext.current
     val now by rememberNow()
@@ -416,6 +446,18 @@ private fun Home(
                         },
                         onDragCancel = {},
                         onVerticalDrag = { _, dy -> total += dy },
+                    )
+                }
+            }
+            // Swipe right = widgets page (when enabled in Settings).
+            .pointerInput(gesturesEnabled, cfg.widgetsOn) {
+                if (gesturesEnabled && cfg.widgetsOn) {
+                    var total = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { total = 0f },
+                        onDragEnd = { if (total > 120f) onOpenWidgets() },
+                        onDragCancel = {},
+                        onHorizontalDrag = { _, dx -> total += dx },
                     )
                 }
             },
@@ -463,7 +505,10 @@ private fun Home(
         }
         Spacer(Modifier.weight(1f))
         favorites.forEach {
-            AppRow(it, 30.sp, p.ink, onClick = { onLaunch(it) }, weight = FontWeight.Normal)
+            AppRow(
+                it, 30.sp, p.ink, onClick = { onLaunch(it) }, weight = FontWeight.Normal,
+                marker = if (cfg.notifDots && it.component.packageName in NotifState.active) p.accent else null,
+            )
         }
         Spacer(Modifier.height(32.dp))
         Pill(p, Modifier.clickable(role = Role.Button, onClick = onOpenSearch)) {
@@ -497,17 +542,36 @@ private fun Drawer(
             app.label.firstOrNull()?.uppercaseChar()?.takeIf { it.isLetter() } ?: '#'
         }.toSortedMap()
     }
+    val listState = rememberLazyListState()
+    val haptic = LocalHapticFeedback.current
+    var activeLetter by remember { mutableStateOf<Char?>(null) }
+    val letters = remember(groups) { groups.keys.toList() }
+    val headerIndex = remember(groups) {
+        val map = mutableMapOf<Char, Int>()
+        var i = 0
+        groups.forEach { (letter, list) -> map[letter] = i; i += 1 + list.size }
+        map
+    }
 
-    // Pulling down while the list is already at the top closes the drawer.
-    val pullToClose = remember(onClose) {
+    // Keep dragging past the top (down) or the bottom (up) of the list to go back Home.
+    val edgeClose = remember(onClose, listState) {
         object : NestedScrollConnection {
-            var pulled = 0f
+            var down = 0f
+            var up = 0f
+            var last = 0L
             override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                if (source == NestedScrollSource.UserInput && available.y > 0f) {
-                    pulled += available.y
-                    if (pulled > 150f) { pulled = 0f; onClose() }
-                } else if (available.y <= 0f) {
-                    pulled = 0f
+                if (source != NestedScrollSource.UserInput) return Offset.Zero
+                val t = System.currentTimeMillis()
+                if (t - last > 300L || consumed.y != 0f) { down = 0f; up = 0f }
+                last = t
+                if (available.y > 0f) {
+                    up = 0f
+                    down += available.y
+                    if (down > 150f) { down = 0f; onClose() }
+                } else if (available.y < 0f && !listState.canScrollForward) {
+                    down = 0f
+                    up -= available.y
+                    if (up > 200f) { up = 0f; onClose() }
                 }
                 return Offset.Zero
             }
@@ -554,22 +618,75 @@ private fun Drawer(
             )
         }
         Spacer(Modifier.height(8.dp))
-        LazyColumn(Modifier.nestedScroll(pullToClose), contentPadding = PaddingValues(bottom = 24.dp)) {
-            groups.forEach { (letter, list) ->
-                stickyHeader(key = "h$letter") {
-                    Box(Modifier.fillMaxWidth().background(p.bg).padding(top = 12.dp, bottom = 4.dp)) {
-                        BasicText(letter.toString(), style = ts(p.accent, 13.sp, FontWeight.Medium, 1.sp))
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(
+                Modifier.fillMaxSize().nestedScroll(edgeClose),
+                state = listState,
+                contentPadding = PaddingValues(end = 28.dp, bottom = 24.dp),
+            ) {
+                groups.forEach { (letter, list) ->
+                    stickyHeader(key = "h$letter") {
+                        Box(Modifier.fillMaxWidth().background(p.bg).padding(top = 12.dp, bottom = 4.dp)) {
+                            BasicText(letter.toString(), style = ts(p.accent, 13.sp, FontWeight.Medium, 1.sp))
+                        }
+                    }
+                    items(list, key = { it.key }) { app ->
+                        val isPinned = app.key in pinned
+                        AppRow(
+                            app, 22.sp, p.ink,
+                            onClick = { onLaunch(app) },
+                            onLongClick = { onTogglePin(app) },
+                            weight = if (isPinned) FontWeight.Medium else FontWeight.Light,
+                            marker = if (isPinned) p.accent else null,
+                        )
                     }
                 }
-                items(list, key = { it.key }) { app ->
-                    val isPinned = app.key in pinned
-                    AppRow(
-                        app, 22.sp, p.ink,
-                        onClick = { onLaunch(app) },
-                        onLongClick = { onTogglePin(app) },
-                        weight = if (isPinned) FontWeight.Medium else FontWeight.Light,
-                        marker = if (isPinned) p.accent else null,
-                    )
+            }
+            // Quick letter strip: tap or slide to jump.
+            if (letters.size > 1) {
+                Column(
+                    Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                        .width(28.dp)
+                        .pointerInput(letters) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull() ?: continue
+                                    if (change.pressed) {
+                                        val frac = (change.position.y / size.height).coerceIn(0f, 0.999f)
+                                        val letter = letters[(frac * letters.size).toInt()]
+                                        if (letter != activeLetter) {
+                                            activeLetter = letter
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            headerIndex[letter]?.let { listState.requestScrollToItem(it) }
+                                        }
+                                        change.consume()
+                                    } else {
+                                        activeLetter = null
+                                    }
+                                }
+                            }
+                        },
+                    verticalArrangement = Arrangement.SpaceEvenly,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    letters.forEach { letter ->
+                        BasicText(
+                            letter.toString(),
+                            style = ts(if (letter == activeLetter) p.ink else p.accent, 11.sp, FontWeight.Medium),
+                        )
+                    }
+                }
+                val shownLetter = activeLetter
+                if (shownLetter != null) {
+                    Box(
+                        Modifier.align(Alignment.Center).size(88.dp).background(p.pill, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        BasicText(shownLetter.toString(), style = ts(p.ink, 44.sp, FontWeight.Light))
+                    }
                 }
             }
         }
@@ -742,6 +859,14 @@ private fun SettingsScreen(
         else Toast.makeText(ctx, "Calendar permission was denied", Toast.LENGTH_SHORT).show()
     }
 
+    val locationPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) onConfig(cfg.copy(weatherLocation = true, weatherOn = true))
+        else Toast.makeText(ctx, "Location permission was denied", Toast.LENGTH_SHORT).show()
+    }
+    val notifGranted = remember(now.minute, cfg.notifDots) {
+        NotificationManagerCompat.getEnabledListenerPackages(ctx).contains(ctx.packageName)
+    }
+
     fun move(i: Int, delta: Int) {
         val j = i + delta
         if (j !in favKeys.indices) return
@@ -756,7 +881,7 @@ private fun SettingsScreen(
         scope.launch {
             val hit = withContext(Dispatchers.IO) { geocode(name) }
             if (hit != null) {
-                onConfig(cfg.copy(city = hit.first, lat = hit.second, lon = hit.third, weatherOn = true))
+                onConfig(cfg.copy(city = hit.first, lat = hit.second, lon = hit.third, weatherOn = true, weatherLocation = false))
                 cityInput = hit.first
             } else {
                 Toast.makeText(ctx, "Couldn't find that place (are you online?)", Toast.LENGTH_SHORT).show()
@@ -837,6 +962,20 @@ private fun SettingsScreen(
                     style = ts(p.muted, 14.sp, FontWeight.Normal),
                 )
             }
+            item {
+                SwitchRow("Use my current location", cfg.weatherLocation, p) { on ->
+                    if (on && !has(Manifest.permission.ACCESS_COARSE_LOCATION)) locationPerm.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                    else onConfig(cfg.copy(weatherLocation = on, weatherOn = cfg.weatherOn || on))
+                }
+            }
+            if (cfg.weatherLocation) {
+                item {
+                    BasicText(
+                        "Using your approximate location. Only coordinates are sent, to Open-Meteo.",
+                        style = ts(p.muted, 14.sp, FontWeight.Normal),
+                    )
+                }
+            }
             item { SwitchRow("Use Fahrenheit", cfg.fahrenheit, p) { onConfig(cfg.copy(fahrenheit = it)) } }
 
             // Calendar
@@ -846,6 +985,37 @@ private fun SettingsScreen(
                     if (on && !has(Manifest.permission.READ_CALENDAR)) calendarPerm.launch(Manifest.permission.READ_CALENDAR)
                     else onConfig(cfg.copy(calendarOn = on))
                 }
+            }
+
+            // Widgets page
+            item { SectionTitle("Widgets page", p) }
+            item { SwitchRow("Page to the left of Home", cfg.widgetsOn, p) { onConfig(cfg.copy(widgetsOn = it)) } }
+            item {
+                BasicText(
+                    "Swipe right on Home to open it. Add and remove widgets there.",
+                    style = ts(p.muted, 14.sp, FontWeight.Normal),
+                )
+            }
+
+            // Notification dots
+            item { SectionTitle("Notification dots", p) }
+            item {
+                SwitchRow("Dot on favorites with notifications", cfg.notifDots, p) { on ->
+                    onConfig(cfg.copy(notifDots = on))
+                    if (on && !notifGranted) {
+                        ctx.startActivity(
+                            Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+                }
+            }
+            item {
+                BasicText(
+                    if (notifGranted) "Notification access is on. Minimal only checks which apps have a notification and never reads its content."
+                    else "Needs notification access. Turn on Minimal notification dots in the list that opens. On Android 13+ you may first need App info > three dots > Allow restricted settings.",
+                    style = ts(p.muted, 14.sp, FontWeight.Normal),
+                )
             }
 
             // Tap actions
@@ -1176,6 +1346,223 @@ private fun AppPicker(p: Palette, slot: Slot, apps: List<App>, onPick: (App?) ->
             }
             items(apps, key = { it.key }) { app ->
                 AppRow(app, 22.sp, p.ink, onClick = { onPick(app) })
+            }
+        }
+    }
+}
+
+// ---------- Widgets page ----------
+
+private const val WIDGET_HOST_ID = 1024
+
+private fun readWidgetIds(ctx: Context): List<Int> =
+    (appPrefs(ctx).getString("widget_ids", "") ?: "").split(",").mapNotNull { it.toIntOrNull() }
+
+private fun writeWidgetIds(ctx: Context, ids: List<Int>) {
+    appPrefs(ctx).edit().putString("widget_ids", ids.joinToString(",")).apply()
+}
+
+@Composable
+private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
+    val ctx = LocalContext.current
+    val host = remember { AppWidgetHost(ctx.applicationContext, WIDGET_HOST_ID) }
+    val manager = remember { AppWidgetManager.getInstance(ctx) }
+    val density = LocalDensity.current
+    val widthDp = LocalConfiguration.current.screenWidthDp - 64
+    var ids by remember { mutableStateOf(readWidgetIds(ctx)) }
+    var editing by remember { mutableStateOf(false) }
+    var choosing by remember { mutableStateOf(false) }
+    var pending by remember { mutableStateOf(-1) } // widget id waiting on a bind or configure step
+
+    DisposableEffect(host) {
+        try { host.startListening() } catch (_: Exception) { }
+        onDispose { try { host.stopListening() } catch (_: Exception) { } }
+    }
+    BackHandler(enabled = choosing) { choosing = false }
+
+    fun addId(id: Int) {
+        ids = ids + id
+        writeWidgetIds(ctx, ids)
+        pending = -1
+    }
+    fun dropId(id: Int) {
+        try { host.deleteAppWidgetId(id) } catch (_: Exception) { }
+        ids = ids - id
+        writeWidgetIds(ctx, ids)
+    }
+
+    val configLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val id = pending
+        if (id != -1) {
+            if (r.resultCode == Activity.RESULT_OK) addId(id)
+            else { try { host.deleteAppWidgetId(id) } catch (_: Exception) { }; pending = -1 }
+        }
+    }
+    fun finishBind(id: Int) {
+        val configure = manager.getAppWidgetInfo(id)?.configure
+        if (configure != null) {
+            pending = id
+            try {
+                configLauncher.launch(
+                    Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE)
+                        .setComponent(configure)
+                        .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id),
+                )
+            } catch (_: Exception) {
+                addId(id)
+            }
+        } else {
+            addId(id)
+        }
+    }
+    val bindLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val id = pending
+        if (id != -1) {
+            if (r.resultCode == Activity.RESULT_OK) finishBind(id)
+            else { try { host.deleteAppWidgetId(id) } catch (_: Exception) { }; pending = -1 }
+        }
+    }
+    fun pick(info: AppWidgetProviderInfo) {
+        val id = host.allocateAppWidgetId()
+        choosing = false
+        if (manager.bindAppWidgetIdIfAllowed(id, info.provider)) {
+            finishBind(id)
+        } else {
+            pending = id
+            bindLauncher.launch(
+                Intent(AppWidgetManager.ACTION_APPWIDGET_BIND)
+                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, info.provider),
+            )
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(p.bg).pointerInput(Unit) { detectTapGestures { } }) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.systemBars)
+                .padding(horizontal = 32.dp)
+                // Swipe left on a blank spot to go back Home.
+                .pointerInput(Unit) {
+                    var total = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { total = 0f },
+                        onDragEnd = { if (total < -120f) onClose() },
+                        onDragCancel = {},
+                        onHorizontalDrag = { _, dx -> total += dx },
+                    )
+                },
+        ) {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                BasicText(
+                    "Home",
+                    style = ts(p.accent, 16.sp, FontWeight.Medium),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 52.dp)
+                        .clickable(role = Role.Button, onClick = onClose)
+                        .wrapContentHeight(Alignment.CenterVertically),
+                )
+                BasicText(
+                    if (editing) "Done" else "Edit",
+                    style = ts(p.accent, 16.sp, FontWeight.Medium),
+                    modifier = Modifier
+                        .heightIn(min = 52.dp)
+                        .clickable(role = Role.Button) { editing = !editing }
+                        .wrapContentHeight(Alignment.CenterVertically)
+                        .padding(horizontal = 16.dp),
+                )
+                BasicText(
+                    "Add",
+                    style = ts(p.accent, 16.sp, FontWeight.Medium),
+                    modifier = Modifier
+                        .heightIn(min = 52.dp)
+                        .clickable(role = Role.Button) { choosing = true }
+                        .wrapContentHeight(Alignment.CenterVertically),
+                )
+            }
+            BasicText("Widgets", style = ts(p.ink, 34.sp))
+            if (ids.isEmpty()) {
+                BasicText(
+                    "No widgets yet. Tap Add to pick one.",
+                    style = ts(p.muted, 15.sp, FontWeight.Normal),
+                    modifier = Modifier.padding(top = 16.dp),
+                )
+            }
+            LazyColumn(contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp)) {
+                items(ids, key = { it }) { id ->
+                    val info = manager.getAppWidgetInfo(id)
+                    if (info == null) {
+                        LaunchedEffect(id) { dropId(id) }
+                    } else {
+                        val heightDp = with(density) { info.minHeight.toDp() }.coerceAtLeast(96.dp)
+                        Column {
+                            AndroidView(
+                                factory = { c -> host.createView(c, id, info) },
+                                update = { v ->
+                                    v.updateAppWidgetSize(Bundle(), widthDp, heightDp.value.toInt(), widthDp, heightDp.value.toInt())
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(heightDp)
+                                    .clip(RoundedCornerShape(24.dp)),
+                            )
+                            if (editing) {
+                                BasicText(
+                                    "Remove",
+                                    style = ts(p.accent, 15.sp, FontWeight.Medium),
+                                    modifier = Modifier
+                                        .heightIn(min = 48.dp)
+                                        .clickable(role = Role.Button) { dropId(id) }
+                                        .wrapContentHeight(Alignment.CenterVertically),
+                                )
+                            }
+                            Spacer(Modifier.height(16.dp))
+                        }
+                    }
+                }
+            }
+        }
+
+        if (choosing) {
+            val pm = ctx.packageManager
+            val providers = remember {
+                manager.installedProviders.sortedBy { it.loadLabel(pm).toString().lowercase() }
+            }
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .background(p.bg)
+                    .windowInsetsPadding(WindowInsets.systemBars)
+                    .padding(horizontal = 32.dp)
+                    .pointerInput(Unit) { detectTapGestures { } },
+            ) {
+                BasicText(
+                    "Cancel",
+                    style = ts(p.accent, 16.sp, FontWeight.Medium),
+                    modifier = Modifier
+                        .padding(top = 8.dp)
+                        .heightIn(min = 52.dp)
+                        .clickable(role = Role.Button) { choosing = false }
+                        .wrapContentHeight(Alignment.CenterVertically),
+                )
+                BasicText("Add a widget", style = ts(p.ink, 28.sp))
+                LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp)) {
+                    items(providers) { info ->
+                        BasicText(
+                            info.loadLabel(pm).toString(),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = ts(p.ink, 20.sp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 52.dp)
+                                .clickable(role = Role.Button) { pick(info) }
+                                .wrapContentHeight(Alignment.CenterVertically),
+                        )
+                    }
+                }
             }
         }
     }
