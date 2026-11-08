@@ -636,7 +636,7 @@ private fun ClockText(p: Palette, style: ClockStyle, now: LocalDateTime, is24: B
         ClockStyle.BOLD -> BasicText(hm, style = ts(p.ink, 96.sp, FontWeight.Bold, (-4).sp, 104.sp))
         ClockStyle.COMPACT -> BasicText(hm, style = ts(p.ink, 48.sp, FontWeight.Normal, (-1).sp, 56.sp))
         ClockStyle.STACKED -> Column {
-            BasicText(f(if (is24) "HH" else "h"), style = ts(p.ink, 88.sp, FontWeight.Light, (-2).sp, 84.sp))
+            BasicText(f(if (is24) "HH" else "hh"), style = ts(p.ink, 88.sp, FontWeight.Light, (-2).sp, 84.sp))
             BasicText(f("mm"), style = ts(p.accent, 88.sp, FontWeight.Light, (-2).sp, 84.sp))
         }
     }
