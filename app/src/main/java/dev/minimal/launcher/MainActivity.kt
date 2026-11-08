@@ -921,7 +921,17 @@ private fun Drawer(
         }.toSortedMap()
     }
     val listState = rememberLazyListState()
-    LaunchedEffect(active) { if (!active) { query = ""; listState.scrollToItem(0) } }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    // Put the keyboard away whenever the panel is leaving, so it never stays up over Home.
+    LaunchedEffect(active) {
+        if (!active) {
+            keyboard?.hide()
+            focusManager.clearFocus()
+            query = ""
+            listState.scrollToItem(0)
+        }
+    }
     val haptic = LocalHapticFeedback.current
     var activeLetter by remember { mutableStateOf<Char?>(null) }
     // The last letter picked on the strip, kept while the dimming fades back out.
@@ -966,6 +976,7 @@ private fun Drawer(
                         if (!pulling && !inStrip) {
                             pulling = if (fromRight) dx > slop && dx > 0.8f * abs(dy)
                             else startedAtTop && dy > slop && dy > 0.9f * abs(dx)
+                            if (pulling) { keyboard?.hide(); focusManager.clearFocus() }
                         }
                         if (pulling) {
                             change.consume()
@@ -1729,10 +1740,9 @@ private fun SettingsScreen(
                             settingsBlock {
                                 SettingsGroup(p, "Wallpaper") {
                                     val c = LocalContext.current
-                                    BasicText(
-                                        "Use matching wallpaper",
-                                        style = ts(p.accent, 16.sp, FontWeight.Medium),
-                                        modifier = Modifier
+                                    Row(
+                                        Modifier
+                                            .fillMaxWidth()
                                             .heightIn(min = 52.dp)
                                             .softClick(role = Role.Button) {
                                                 appPrefs(c).edit().putInt("wp_seed", c.getColor(android.R.color.system_accent1_500)).apply()
@@ -1748,9 +1758,12 @@ private fun SettingsScreen(
                                                 } catch (_: Exception) {
                                                     Toast.makeText(c, "Couldn't open the wallpaper picker", Toast.LENGTH_SHORT).show()
                                                 }
-                                            }
-                                            .wrapContentHeight(Alignment.CenterVertically),
-                                    )
+                                            },
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        BasicText("Use matching wallpaper", style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
+                                        SideChevron(left = false, color = p.muted)
+                                    }
                                 }
                                 Caption(p, "A plain wallpaper in the same color as Home. It switches between light and dark with your phone, and keeps your current Material You colors instead of recoloring them.")
                             }
