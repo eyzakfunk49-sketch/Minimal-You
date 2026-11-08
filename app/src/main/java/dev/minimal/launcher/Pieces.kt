@@ -276,12 +276,21 @@ internal fun ActionRow(label: String, p: Palette, onClick: () -> Unit) {
 }
 
 @Composable
-internal fun OptionRow(label: String, selected: Boolean, p: Palette, family: FontFamily? = null, onClick: () -> Unit) {
+internal fun OptionRow(
+    label: String,
+    selected: Boolean,
+    p: Palette,
+    family: FontFamily? = null,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
     Row(
         Modifier
             .fillMaxWidth()
             .heightIn(min = 52.dp)
-            .softClick(role = Role.RadioButton, onClick = onClick),
+            // Disabled rows are dimmed and ignore touches completely.
+            .alpha(if (enabled) 1f else 0.4f)
+            .then(if (enabled) Modifier.softClick(role = Role.RadioButton, onClick = onClick) else Modifier),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RadioDot(selected, p)
