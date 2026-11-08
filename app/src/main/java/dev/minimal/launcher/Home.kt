@@ -162,7 +162,9 @@ internal fun ClockText(p: Palette, style: ClockStyle, now: LocalDateTime, is24: 
         ClockStyle.TWO_TONE -> BasicText(
             androidx.compose.ui.text.buildAnnotatedString {
                 append(hm.substringBefore(':'))
-                withStyle(androidx.compose.ui.text.SpanStyle(color = p.accent)) { append(":" + hm.substringAfter(':')) }
+                val mark = pushStyle(androidx.compose.ui.text.SpanStyle(color = p.accent))
+                append(":" + hm.substringAfter(':'))
+                pop(mark)
             },
             style = ts(p.ink, 96.sp, FontWeight.Light, (-4).sp, 104.sp),
         )
