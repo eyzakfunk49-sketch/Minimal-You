@@ -486,6 +486,8 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                 },
         ) {
             Box(Modifier.fillMaxSize().graphicsLayer {
+                // Fading each draw op directly is much cheaper than rendering the whole page off-screen every frame.
+                compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
                 translationX = widgetsP.value * size.width * 0.22f - (if (cfg.drawerRight) drawerP.value * size.width * 0.22f else 0f)
                 translationY = -((if (cfg.drawerRight) 0f else drawerP.value) + searchP.value) * size.height * 0.22f
                 alpha = (1f - drawerP.value - widgetsP.value - searchP.value - settingsP.value).coerceIn(0f, 1f)
@@ -551,6 +553,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             run {
                 // The app list page, always ready so the first pull is smooth.
                 Box(Modifier.fillMaxSize().graphicsLayer {
+                    compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
                     if (cfg.drawerRight) translationX = (1f - drawerP.value) * size.width
                     else translationY = (1f - drawerP.value) * size.height
                     alpha = (drawerP.value * 1.6f).coerceIn(0f, 1f)
@@ -575,6 +578,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             }
             if (searchVisible) {
                 Box(Modifier.fillMaxSize().graphicsLayer {
+                    compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
                     translationY = (1f - searchP.value) * size.height
                     alpha = (searchP.value * 1.6f).coerceIn(0f, 1f)
                 }) {
@@ -647,6 +651,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                 }
             }
             if (settingsVisible) Box(Modifier.fillMaxSize().graphicsLayer {
+                compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
                 translationY = (1f - settingsP.value) * size.height * 0.05f
                 alpha = (settingsP.value * 1.6f).coerceIn(0f, 1f)
             }) {

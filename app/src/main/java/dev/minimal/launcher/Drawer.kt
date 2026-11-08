@@ -272,7 +272,10 @@ internal fun Drawer(
                             onLongClick = { onTogglePin(app) },
                             weight = if (activeLetter == letter) FontWeight.SemiBold else if (isPinned) FontWeight.Medium else FontWeight.Light,
                             marker = if (isPinned) p.accent else null,
-                            modifier = Modifier.graphicsLayer { alpha = if (litLetter == letter) 1f else 1f - 0.65f * focus.value },
+                            // Remembered so scrolling doesn't rebuild this for every row; it still reads the live values.
+                            modifier = remember(letter) {
+                                Modifier.graphicsLayer { alpha = if (litLetter == letter) 1f else 1f - 0.65f * focus.value }
+                            },
                         )
                     }
                 }
