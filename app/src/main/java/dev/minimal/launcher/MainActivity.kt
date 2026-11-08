@@ -476,9 +476,11 @@ fun LauncherApp(homePress: Int, resumes: Int) {
         LaunchedEffect(exclusionOn) { moveEdgeExclusion(if (lastTouch.y > 0f) lastTouch.y else view.height * 0.65f) }
         LaunchedEffect(resumes) { launching = false }
         LaunchedEffect(launching) { if (launching) { delay(2500); launching = false } }
-        val zoom by animateFloatAsState(
-            if (launching) 0.94f else 1f,
-            tw(if (launching) 320 else 380, easing = EmphasizedDecel), label = "zoom",
+        // Android slides the new app in from the right and a launcher can't change that, so Home steps aside
+        // to the left as it does: together they read as one push transition instead of two unrelated motions.
+        val push by animateFloatAsState(
+            if (launching) 1f else 0f,
+            tw(if (launching) 380 else 420, easing = EmphasizedDecel), label = "push",
         )
         val fade by animateFloatAsState(
             // Stays mostly visible so there is never a dark gap while the app window is still starting.
@@ -489,11 +491,8 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(
-                        (lastTouch.x / size.width.coerceAtLeast(1f)).coerceIn(0f, 1f),
-                        (lastTouch.y / size.height.coerceAtLeast(1f)).coerceIn(0f, 1f),
-                    )
-                    scaleX = zoom; scaleY = zoom; alpha = fade
+                    translationX = -push * size.width * 0.2f
+                    alpha = fade
                 }
                 .background(p.bg)
                 .pointerInput(Unit) {
