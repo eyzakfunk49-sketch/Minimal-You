@@ -65,6 +65,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import kotlin.math.abs
+import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
 import android.app.Activity
 import android.appwidget.AppWidgetHost
@@ -434,6 +435,9 @@ internal fun AppRow(
     fullWidth: Boolean = false,
 ) {
     var textCoords by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
+    // Where the middle of the letters really is inside the text box (it differs per font), so the dot lines up with them.
+    var dotShift by remember { mutableStateOf(0f) }
+    val sizePx = with(LocalDensity.current) { size.toPx() }
     val click = {
         // Remember where this name is, so the opening app can grow out of it.
         textCoords?.takeIf { it.isAttached }?.let { tappedTextBounds = it.boundsInRoot() }
@@ -451,11 +455,15 @@ internal fun AppRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = ts(color, size, weight),
+            onTextLayout = { layout ->
+                val letterMiddle = layout.firstBaseline - sizePx * 0.32f
+                dotShift = letterMiddle - layout.size.height / 2f
+            },
             modifier = Modifier.weight(1f, fill = false).onGloballyPositioned { textCoords = it },
         )
         if (marker != null) {
             Spacer(Modifier.width(12.dp))
-            Canvas(Modifier.size(8.dp)) { drawCircle(marker) }
+            Canvas(Modifier.size(8.dp).offset { IntOffset(0, dotShift.roundToInt()) }) { drawCircle(marker) }
         }
     }
 }
