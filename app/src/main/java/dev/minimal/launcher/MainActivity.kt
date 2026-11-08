@@ -585,6 +585,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     favorites = favorites, apps = apps, onSetFavs = setFavs,
                     onPickSlot = { pickSlot = it },
                     onOpenHidden = { hiddenOpen = true },
+                    coveredByScreen = hiddenOpen || pickSlot != null,
                     onBack = { settingsOpen = false },
                 )
             }
@@ -1290,6 +1291,8 @@ private fun SettingsScreen(
     onSetFavs: (List<String>) -> Unit,
     onPickSlot: (Slot) -> Unit,
     onOpenHidden: () -> Unit,
+    // True while a screen is open on top of Settings (hidden apps, app picker); Back then belongs to that screen.
+    coveredByScreen: Boolean,
     onBack: () -> Unit,
 ) {
     val ctx = LocalContext.current
@@ -1345,7 +1348,7 @@ private fun SettingsScreen(
         }
     }
 
-    BackHandler(enabled = page != null) { page = null }
+    BackHandler(enabled = page != null && !coveredByScreen) { page = null }
 
     Column(
         Modifier
