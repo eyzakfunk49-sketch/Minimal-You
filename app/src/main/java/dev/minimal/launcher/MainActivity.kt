@@ -19,6 +19,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -45,6 +47,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import android.app.Activity
 import android.appwidget.AppWidgetHost
 import android.appwidget.AppWidgetManager
@@ -352,15 +355,15 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             )
             AnimatedVisibility(
                 visible = widgetsOpen,
-                enter = slideInHorizontally { -it } + fadeIn(),
-                exit = slideOutHorizontally { -it } + fadeOut(),
+                enter = slideInHorizontally(tween(380, easing = EmphasizedDecel)) { -it / 4 } + fadeIn(tween(300, easing = EmphasizedDecel)),
+                exit = slideOutHorizontally(tween(240, easing = EmphasizedAccel)) { -it / 4 } + fadeOut(tween(200, easing = EmphasizedAccel)),
             ) {
                 WidgetsScreen(p, onClose = { widgetsOpen = false })
             }
             AnimatedVisibility(
                 visible = drawerOpen,
-                enter = slideInVertically { it / 3 } + fadeIn(),
-                exit = slideOutVertically { it / 3 } + fadeOut(),
+                enter = slideInVertically(tween(380, easing = EmphasizedDecel)) { it / 10 } + fadeIn(tween(300, easing = EmphasizedDecel)),
+                exit = slideOutVertically(tween(240, easing = EmphasizedAccel)) { it / 10 } + fadeOut(tween(200, easing = EmphasizedAccel)),
             ) {
                 Drawer(
                     p, apps, favorites.map { it.key }.toSet(),
@@ -371,15 +374,15 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             }
             AnimatedVisibility(
                 visible = searchOpen,
-                enter = slideInVertically { it / 3 } + fadeIn(),
-                exit = slideOutVertically { it / 3 } + fadeOut(),
+                enter = slideInVertically(tween(380, easing = EmphasizedDecel)) { it / 10 } + fadeIn(tween(300, easing = EmphasizedDecel)),
+                exit = slideOutVertically(tween(240, easing = EmphasizedAccel)) { it / 10 } + fadeOut(tween(200, easing = EmphasizedAccel)),
             ) {
                 SearchScreen(p, cfg, apps, onClose = { searchOpen = false })
             }
             AnimatedVisibility(
                 visible = settingsOpen,
-                enter = slideInVertically { it / 3 } + fadeIn(),
-                exit = slideOutVertically { it / 3 } + fadeOut(),
+                enter = slideInVertically(tween(380, easing = EmphasizedDecel)) { it / 10 } + fadeIn(tween(300, easing = EmphasizedDecel)),
+                exit = slideOutVertically(tween(240, easing = EmphasizedAccel)) { it / 10 } + fadeOut(tween(200, easing = EmphasizedAccel)),
             ) {
                 SettingsScreen(
                     p, cfg, updateCfg,
@@ -437,6 +440,9 @@ private fun ClockText(p: Palette, style: ClockStyle, now: LocalDateTime, is24: B
     }
 }
 
+private val EmphasizedDecel = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
+private val EmphasizedAccel = CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f)
+
 @Composable
 private fun Home(
     p: Palette,
@@ -464,8 +470,8 @@ private fun Home(
     val curDrawer by rememberUpdatedState(onOpenDrawer)
     val curNotifications by rememberUpdatedState(onNotifications)
     val curWidgets by rememberUpdatedState(onOpenWidgets)
-    val showStatus = cfg.hideStatusBar && (cfg.showBattery || cfg.showWifi || cfg.showSignal)
-    val status by rememberStatus(showStatus)
+    val showBatteryLine = cfg.hideStatusBar && cfg.showBattery
+    val status by rememberStatus(showBatteryLine)
 
     Column(
         Modifier
@@ -511,13 +517,7 @@ private fun Home(
                 }
             },
     ) {
-        if (cfg.hideStatusBar) {
-            Spacer(Modifier.height(24.dp))
-            if (showStatus) StatusRow(p, cfg, status) else Spacer(Modifier.height(24.dp))
-            Spacer(Modifier.height(40.dp))
-        } else {
-            Spacer(Modifier.height(64.dp))
-        }
+        Spacer(Modifier.height(64.dp))
         Column(Modifier.fillMaxWidth()) {
             val datePattern = cfg.date.pattern
             if (datePattern != null) {
@@ -533,17 +533,34 @@ private fun Home(
             Box(Modifier.clickable(role = Role.Button) { onSlot(Slot.CLOCK) }) {
                 ClockText(p, cfg.clock, now, is24)
             }
-            if (weather != null) {
-                val line = listOf("${weather.temp}°", describe(weather.code))
-                    .filter { it.isNotEmpty() }.joinToString(" · ")
-                BasicText(
-                    line,
-                    style = ts(p.accent, 15.sp, FontWeight.Medium),
-                    modifier = Modifier
-                        .heightIn(min = 40.dp)
-                        .clickable(role = Role.Button) { onSlot(Slot.WEATHER) }
-                        .wrapContentHeight(Alignment.CenterVertically),
-                )
+            if (weather != null || showBatteryLine) {
+                Row(
+                    Modifier.heightIn(min = 40.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (weather != null) {
+                        val line = listOf("${weather.temp}°", describe(weather.code))
+                            .filter { it.isNotEmpty() }.joinToString(" · ")
+                        BasicText(
+                            line,
+                            style = ts(p.accent, 15.sp, FontWeight.Medium),
+                            modifier = Modifier
+                                .heightIn(min = 40.dp)
+                                .clickable(role = Role.Button) { onSlot(Slot.WEATHER) }
+                                .wrapContentHeight(Alignment.CenterVertically),
+                        )
+                    }
+                    if (showBatteryLine) {
+                        if (weather != null) {
+                            BasicText("  \u00B7  ", style = ts(p.muted, 15.sp, FontWeight.Normal))
+                        }
+                        val low = status.battery <= 15 && !status.charging
+                        val fill = if (status.charging) p.accent else if (low) Color(0xFFE57373) else p.ink
+                        BatteryIcon(status.battery, p.muted, fill)
+                        Spacer(Modifier.width(6.dp))
+                        BasicText("${status.battery}%", style = ts(p.muted, 15.sp, FontWeight.Normal))
+                    }
+                }
             }
             if (event != null) {
                 BasicText(
@@ -670,12 +687,12 @@ private fun Drawer(
                 contentPadding = PaddingValues(end = 28.dp, bottom = 24.dp),
             ) {
                 groups.forEach { (letter, list) ->
-                    stickyHeader(key = "h$letter") {
+                    stickyHeader(key = "h$letter", contentType = "header") {
                         Box(Modifier.fillMaxWidth().background(p.bg).padding(top = 12.dp, bottom = 4.dp)) {
                             BasicText(letter.toString(), style = ts(p.accent, 13.sp, FontWeight.Medium, 1.sp))
                         }
                     }
-                    items(list, key = { it.key }) { app ->
+                    items(list, key = { it.key }, contentType = { "app" }) { app ->
                         val isPinned = app.key in pinned
                         AppRow(
                             app, 22.sp, p.ink,
@@ -908,10 +925,6 @@ private fun SettingsScreen(
         if (ok) onConfig(cfg.copy(weatherLocation = true, weatherOn = true))
         else Toast.makeText(ctx, "Location permission was denied", Toast.LENGTH_SHORT).show()
     }
-    val phonePerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        if (ok) onConfig(cfg.copy(showSignal = true))
-        else Toast.makeText(ctx, "Phone permission was denied, so signal bars can't show", Toast.LENGTH_SHORT).show()
-    }
     val notifGranted = remember(now.minute, cfg.notifDots) {
         NotificationManagerCompat.getEnabledListenerPackages(ctx).contains(ctx.packageName)
     }
@@ -1042,16 +1055,9 @@ private fun SettingsScreen(
             item { SwitchRow("Hide status bar", cfg.hideStatusBar, p) { onConfig(cfg.copy(hideStatusBar = it)) } }
             if (cfg.hideStatusBar) {
                 item { SwitchRow("Battery on Home", cfg.showBattery, p) { onConfig(cfg.copy(showBattery = it)) } }
-                item { SwitchRow("Wi-Fi on Home", cfg.showWifi, p) { onConfig(cfg.copy(showWifi = it)) } }
-                item {
-                    SwitchRow("Signal strength on Home", cfg.showSignal, p) { on ->
-                        if (on && !has(Manifest.permission.READ_PHONE_STATE)) phonePerm.launch(Manifest.permission.READ_PHONE_STATE)
-                        else onConfig(cfg.copy(showSignal = on))
-                    }
-                }
                 item {
                     BasicText(
-                        "Signal bars need phone permission to read signal strength. Nothing is sent anywhere. Swipe down from the very top edge to peek at the real status bar.",
+                        "The battery level shows next to the weather on Home. Swipe down from the very top edge to peek at the real status bar.",
                         style = ts(p.muted, 14.sp, FontWeight.Normal),
                     )
                 }
@@ -1629,21 +1635,34 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
         }
     }
 
-    Box(Modifier.fillMaxSize().background(p.bg).pointerInput(Unit) { detectTapGestures { } }) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(p.bg)
+            // Keep touches from reaching Home underneath, without consuming them so widgets stay interactive.
+            .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent(PointerEventPass.Final) } },
+    ) {
         Column(
             Modifier
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
                 .padding(horizontal = 32.dp)
-                // Swipe left on a blank spot to go back Home.
-                .pointerInput(Unit) {
-                    var total = 0f
-                    detectHorizontalDragGestures(
-                        onDragStart = { total = 0f },
-                        onDragEnd = { if (total < -120f) onClose() },
-                        onDragCancel = {},
-                        onHorizontalDrag = { _, dx -> total += dx },
-                    )
+                // Swipe left to go back Home. Observes without consuming, so widgets keep their touches.
+                .pointerInput(editing) {
+                    if (editing) return@pointerInput
+                    awaitEachGesture {
+                        val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        var dx = 0f
+                        var dy = 0f
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val change = event.changes.firstOrNull { it.id == first.id } ?: break
+                            if (!change.pressed) break
+                            val d = change.positionChange()
+                            dx += d.x; dy += d.y
+                        }
+                        if (dx < -160f && abs(dx) > 2.5f * abs(dy)) onClose()
+                    }
                 },
         ) {
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1888,93 +1907,45 @@ private fun rememberStatus(enabled: Boolean): State<SysStatus> {
     return status
 }
 
-@Composable
-private fun StatusRow(p: Palette, cfg: Config, status: SysStatus) {
-    Row(
-        Modifier.fillMaxWidth().height(24.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.End),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        val cell = status.cell
-        if (cfg.showSignal && cell != null) SignalIcon(cell, p.muted)
-        val wifi = status.wifi
-        if (cfg.showWifi && wifi != null) WifiIcon(wifi, p.muted)
-        if (cfg.showBattery) {
-            val low = status.battery <= 15 && !status.charging
-            val fill = if (status.charging) p.accent else if (low) Color(0xFFE57373) else p.ink
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                BatteryIcon(status.battery, p.muted, fill)
-                BasicText("${status.battery}%", style = ts(p.muted, 13.sp, FontWeight.Normal))
-            }
-        }
-    }
-}
-
-@Composable
-private fun SignalIcon(level: Int, color: Color) {
-    Canvas(Modifier.size(width = 16.dp, height = 12.dp)) {
-        val barW = size.width * 0.18f
-        val gap = (size.width - 4 * barW) / 3f
-        for (i in 0..3) {
-            val h = size.height * (0.35f + 0.65f * i / 3f)
-            drawRoundRect(
-                color = if (i < level) color else color.copy(alpha = 0.3f),
-                topLeft = Offset(i * (barW + gap), size.height - h),
-                size = Size(barW, h),
-                cornerRadius = CornerRadius(barW / 2f),
-            )
-        }
-    }
-}
-
-@Composable
-private fun WifiIcon(level: Int, color: Color) {
-    Canvas(Modifier.size(width = 16.dp, height = 12.dp)) {
-        val cx = size.width / 2f
-        val bottom = size.height
-        val stroke = 1.6.dp.toPx()
-        val lit = (level - 1).coerceIn(0, 3)
-        drawCircle(color, radius = stroke * 0.9f, center = Offset(cx, bottom - stroke))
-        for (k in 1..3) {
-            val r = size.height * (k * 0.3f)
-            drawArc(
-                color = if (k <= lit) color else color.copy(alpha = 0.3f),
-                startAngle = 225f,
-                sweepAngle = 90f,
-                useCenter = false,
-                topLeft = Offset(cx - r, bottom - r),
-                size = Size(2 * r, 2 * r),
-                style = Stroke(stroke, cap = StrokeCap.Round),
-            )
-        }
-    }
-}
-
+/** Battery glyph drawn on whole device pixels so edges stay crisp on any density. */
 @Composable
 private fun BatteryIcon(percent: Int, outline: Color, fill: Color) {
-    Canvas(Modifier.size(width = 22.dp, height = 11.dp)) {
-        val sw = 1.2.dp.toPx()
-        val bodyW = size.width - 2.dp.toPx()
+    Canvas(Modifier.size(width = 26.dp, height = 13.dp)) {
+        fun px(dp: Float) = (dp * density).roundToInt().coerceAtLeast(1).toFloat()
+        val w = size.width.roundToInt().toFloat()
+        val h = size.height.roundToInt().toFloat()
+        val sw = px(1.5f)
+        val capW = px(2f)
+        val bodyW = w - capW
+        val radius = px(3.5f)
+        // Outline: stroke centred half a stroke inside the bounds so it never blurs across pixels.
         drawRoundRect(
             color = outline,
             topLeft = Offset(sw / 2f, sw / 2f),
-            size = Size(bodyW - sw, size.height - sw),
-            cornerRadius = CornerRadius(3.dp.toPx()),
+            size = Size(bodyW - sw, h - sw),
+            cornerRadius = CornerRadius(radius - sw / 2f),
             style = Stroke(sw),
         )
+        // Terminal cap
+        val capH = (h * 0.4f).roundToInt().toFloat()
         drawRoundRect(
             color = outline,
-            topLeft = Offset(bodyW, size.height * 0.3f),
-            size = Size(1.6.dp.toPx(), size.height * 0.4f),
-            cornerRadius = CornerRadius(1.dp.toPx()),
+            topLeft = Offset(bodyW, ((h - capH) / 2f).roundToInt().toFloat()),
+            size = Size(capW, capH),
+            cornerRadius = CornerRadius(px(1f)),
         )
-        val inset = sw + 1.dp.toPx()
-        val fillW = ((bodyW - 2 * inset) * percent.coerceIn(0, 100) / 100f).coerceAtLeast(0f)
-        drawRoundRect(
-            color = fill,
-            topLeft = Offset(inset, inset),
-            size = Size(fillW, size.height - 2 * inset),
-            cornerRadius = CornerRadius(1.5.dp.toPx()),
-        )
+        // Charge level
+        val gap = px(1.5f)
+        val inset = sw + gap
+        val maxFill = bodyW - 2 * inset
+        val fillW = (maxFill * percent.coerceIn(0, 100) / 100f).roundToInt().toFloat()
+        if (fillW > 0f) {
+            drawRoundRect(
+                color = fill,
+                topLeft = Offset(inset, inset),
+                size = Size(fillW, h - 2 * inset),
+                cornerRadius = CornerRadius(px(1.5f)),
+            )
+        }
     }
 }
