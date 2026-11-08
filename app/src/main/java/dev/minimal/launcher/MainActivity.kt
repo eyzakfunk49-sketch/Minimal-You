@@ -188,15 +188,11 @@ private fun openApp(ctx: Context, app: App) {
     val v = launchView
     val options = if (!animationsOn) {
         android.app.ActivityOptions.makeCustomAnimation(ctx, 0, 0).toBundle()
-    } else if (v != null) {
-        // The new app grows out of the row you tapped (rounded reveal) instead of popping in from a dot.
-        val w = (v.width * 0.5f).toInt().coerceAtLeast(240)
-        val h = 120
-        android.app.ActivityOptions.makeClipRevealAnimation(
-            v, (lastTouch.x - w / 2f).toInt().coerceIn(0, (v.width - w).coerceAtLeast(0)),
-            (lastTouch.y - h / 2f).toInt().coerceIn(0, (v.height - h).coerceAtLeast(0)), w, h,
-        ).toBundle()
-    } else null
+    } else {
+        // Our own enter/exit animation: the app scales up and fades in while Home eases back. A custom
+        // animation is honoured by the system, whereas reveal/scale-up options are ignored for third-party launchers.
+        android.app.ActivityOptions.makeCustomAnimation(ctx, R.anim.app_open_enter, R.anim.app_open_exit).toBundle()
+    }
     launching = true
     try { ctx.startActivity(intent, options) } catch (_: Exception) { launching = false }
 }
@@ -849,7 +845,7 @@ private fun Home(
                         }
                         val low = status.battery <= 15 && !status.charging
                         val fill = if (status.charging) p.accent else if (low) Color(0xFFE57373) else p.ink
-                        BatteryIcon(status.battery, p.muted, fill)
+                        BatteryIcon(status.battery, p.muted, fill, status.charging, p.ink, p.bg)
                         Spacer(Modifier.width(6.dp))
                         BasicText("${status.battery}%", style = ts(p.muted, 15.sp, FontWeight.Normal))
                     }
@@ -2677,7 +2673,7 @@ private fun rememberStatus(enabled: Boolean): State<SysStatus> {
         if (enabled) {
             while (true) {
                 status.value = withContext(Dispatchers.Default) { readStatus(ctx) }
-                delay(10_000L)
+                delay(4_000L)
             }
         }
     }
@@ -2686,7 +2682,7 @@ private fun rememberStatus(enabled: Boolean): State<SysStatus> {
 
 /** Battery glyph drawn on whole device pixels so edges stay crisp on any density. */
 @Composable
-private fun BatteryIcon(percent: Int, outline: Color, fill: Color) {
+private fun BatteryIcon(percent: Int, outline: Color, fill: Color, charging: Boolean = false, bolt: Color = Color.White, halo: Color = Color.Black) {
     Canvas(Modifier.size(width = 26.dp, height = 13.dp)) {
         fun px(dp: Float) = (dp * density).roundToInt().coerceAtLeast(1).toFloat()
         val w = size.width.roundToInt().toFloat()
@@ -2723,6 +2719,24 @@ private fun BatteryIcon(percent: Int, outline: Color, fill: Color) {
                 size = Size(fillW, h - 2 * inset),
                 cornerRadius = CornerRadius(px(1.5f)),
             )
+        }
+        // Lightning bolt while charging, with a thin halo so it reads over both the filled and empty parts.
+        if (charging) {
+            val cx = bodyW / 2f
+            val cy = h / 2f
+            val bh = h * 0.78f
+            val bw = bh * 0.55f
+            val bp = androidx.compose.ui.graphics.Path().apply {
+                moveTo(cx + bw * 0.12f, cy - bh / 2f)
+                lineTo(cx - bw / 2f, cy + bh * 0.08f)
+                lineTo(cx - bw * 0.04f, cy + bh * 0.08f)
+                lineTo(cx - bw * 0.14f, cy + bh / 2f)
+                lineTo(cx + bw / 2f, cy - bh * 0.10f)
+                lineTo(cx + bw * 0.05f, cy - bh * 0.10f)
+                close()
+            }
+            drawPath(bp, halo, style = Stroke(px(1.6f), join = androidx.compose.ui.graphics.StrokeJoin.Round))
+            drawPath(bp, bolt)
         }
     }
 }
