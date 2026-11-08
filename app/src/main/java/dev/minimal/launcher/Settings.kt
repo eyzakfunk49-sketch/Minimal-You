@@ -391,6 +391,9 @@ internal fun SettingsScreen(
                             settingsBlock {
                                 SettingsGroup(p, "Clock style") {
                                     SwitchRow("Show clock", cfg.showClock, p) { onConfig(cfg.copy(showClock = it)) }
+                                    if (!cfg.showClock) {
+                                        SwitchRow("Center apps on screen", cfg.centerApps, p) { onConfig(cfg.copy(centerApps = it)) }
+                                    }
                                     ClockStyle.entries.forEach { s -> OptionRow(s.label, s == cfg.clock, p) { onConfig(cfg.copy(clock = s)) } }
                                 }
                             }

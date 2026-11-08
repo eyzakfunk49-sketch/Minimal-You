@@ -393,6 +393,8 @@ internal fun Home(
                 )
             }
         }
+        // With the clock hidden, the favorites can sit in the middle of the screen instead of at the bottom.
+        val centered = cfg.centerApps && !cfg.showClock
         Spacer(Modifier.weight(1f))
         favorites.take(maxFavorites(cfg)).forEach {
             AppRow(
@@ -401,6 +403,7 @@ internal fun Home(
                 marker = if (cfg.notifDots && it.component.packageName in NotifState.active) p.accent else null,
             )
         }
+        if (centered) Spacer(Modifier.weight(1f))
         Spacer(Modifier.height(32.dp))
         Pill(
             p,

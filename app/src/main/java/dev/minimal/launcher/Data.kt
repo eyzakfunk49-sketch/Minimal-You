@@ -133,6 +133,7 @@ data class Config(
     val showBattery: Boolean = true,
     val showClock: Boolean = true,
     val homeAlign: HomeAlign = HomeAlign.LEFT,
+    val centerApps: Boolean = false,
     val animations: Boolean = true,
     val drawerRight: Boolean = false,
     val swipeUpSearch: Boolean = false,
@@ -176,6 +177,7 @@ fun loadConfig(ctx: Context): Config {
         showBattery = p.getBoolean("showBattery", true),
         showClock = p.getBoolean("showClock", true),
         homeAlign = p.readEnum("homeAlign", HomeAlign.LEFT),
+        centerApps = p.getBoolean("centerApps", false),
         animations = p.getBoolean("animations", true),
         drawerRight = p.getBoolean("drawerRight", false),
         swipeUpSearch = p.getBoolean("swipeUpSearch", false),
@@ -211,6 +213,7 @@ fun saveConfig(ctx: Context, c: Config) {
         .putBoolean("showBattery", c.showBattery)
         .putBoolean("showClock", c.showClock)
         .putString("homeAlign", c.homeAlign.name)
+        .putBoolean("centerApps", c.centerApps)
         .putBoolean("animations", c.animations)
         .putBoolean("drawerRight", c.drawerRight)
         .putBoolean("swipeUpSearch", c.swipeUpSearch)
