@@ -1763,7 +1763,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                     .groupBy { it.provider.packageName }
                     .map { (pkg, list) ->
                         val appLabel = try {
-                            list.first().providerInfo.applicationInfo.loadLabel(pm).toString()
+                            pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
                         } catch (_: Exception) {
                             list.first().loadLabel(pm).toString()
                         }
