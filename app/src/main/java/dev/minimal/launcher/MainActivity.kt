@@ -20,6 +20,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.snap
@@ -412,17 +413,16 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                 },
         ) {
             Box(Modifier.fillMaxSize().graphicsLayer {
-                val s = 1f - 0.05f * drawerP.value
-                scaleX = s; scaleY = s
-                translationX = widgetsP.value * size.width * 0.22f - (if (cfg.drawerRight) drawerP.value * size.width * 0.12f else 0f)
+                translationX = widgetsP.value * size.width * 0.22f - (if (cfg.drawerRight) drawerP.value * size.width * 0.22f else 0f)
+                translationY = if (cfg.drawerRight) 0f else -drawerP.value * size.height * 0.22f
                 alpha = (1f - drawerP.value - widgetsP.value).coerceIn(0f, 1f)
             }) {
             Home(
                 p, cfg, favorites, weather, event,
                 onOpenDrawer = { drawerOpen = true },
-                onDrawerDrag = { f -> pageScope.launch { drawerP.snapTo(f.coerceIn(0f, 1f)) } },
+                onDrawerDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { drawerP.snapTo(f.coerceIn(0f, 1f)) } },
                 onDrawerEnd = { velocity ->
-                    val open = drawerP.value > 0.25f && velocity > -200f || velocity < -900f
+                    val open = if (velocity < -450f) true else if (velocity > 450f) false else drawerP.value > 0.3f
                     drawerOpen = open
                     pageScope.launch { drawerP.animateTo(if (open) 1f else 0f, drawerSpec, initialVelocity = 0f) }
                 },
@@ -435,15 +435,15 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                 onLaunch = { openApp(ctx, it) },
                 onSlot = openSlot,
                 onOpenWidgets = { widgetsOpen = true },
-                onWidgetsDrag = { f -> pageScope.launch { widgetsP.snapTo(f.coerceIn(0f, 1f)) } },
+                onWidgetsDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { widgetsP.snapTo(f.coerceIn(0f, 1f)) } },
                 onWidgetsEnd = { v ->
-                    val open = if (v > 900f) true else if (v < -900f) false else widgetsP.value > 0.5f
+                    val open = if (v > 450f) true else if (v < -450f) false else widgetsP.value > 0.4f
                     widgetsOpen = open
                     pageScope.launch { widgetsP.animateTo(if (open) 1f else 0f, drawerSpec) }
                 },
             )
             }
-            if (widgetsVisible) {
+            if (widgetsVisible || cfg.widgetsOn) {
                 Box(Modifier.fillMaxSize().graphicsLayer {
                     translationX = -(1f - widgetsP.value) * size.width
                     alpha = (widgetsP.value * 1.6f).coerceIn(0f, 1f)
@@ -451,17 +451,17 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     WidgetsScreen(
                         p,
                         onClose = { widgetsOpen = false },
-                        onDrag = { f -> pageScope.launch { widgetsP.snapTo(f.coerceIn(0f, 1f)) } },
+                        onDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { widgetsP.snapTo(f.coerceIn(0f, 1f)) } },
                         onEnd = { v ->
-                            val open = if (v > 900f) true else if (v < -900f) false else widgetsP.value > 0.5f
+                            val open = if (v > 450f) true else if (v < -450f) false else widgetsP.value > 0.4f
                             widgetsOpen = open
                             pageScope.launch { widgetsP.animateTo(if (open) 1f else 0f, drawerSpec) }
                         },
                     )
                 }
             }
-            if (drawerVisible) {
-                // A page pulled up over Home.
+            run {
+                // The app list page, always ready so the first pull is smooth.
                 Box(Modifier.fillMaxSize().graphicsLayer {
                     if (cfg.drawerRight) translationX = (1f - drawerP.value) * size.width
                     else translationY = (1f - drawerP.value) * size.height
@@ -470,6 +470,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     Drawer(
                         p, visibleApps, favorites.map { it.key }.toSet(),
                         fromRight = cfg.drawerRight,
+                        active = drawerVisible,
                         progress = { drawerP.value },
                         onLaunch = { openApp(ctx, it) },
                         onTogglePin = togglePin,
@@ -477,6 +478,9 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     )
                 }
             }
+            // Let swipes that start at the very edge reach us instead of triggering the system back gesture.
+            Box(Modifier.align(Alignment.CenterStart).width(36.dp).height(200.dp).systemGestureExclusion())
+            Box(Modifier.align(Alignment.CenterEnd).width(36.dp).height(200.dp).systemGestureExclusion())
             AnimatedVisibility(
                 visible = searchOpen,
                 enter = screenEnter(),
@@ -583,8 +587,7 @@ private fun pushExit(): ExitTransition = slideOutHorizontally(tw(210, easing = E
 private fun Modifier.softCombined(onClick: () -> Unit, onLongClick: (() -> Unit)?): Modifier = composed {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
-    val a by animateFloatAsState(if (pressed) 0.5f else 1f, tw(if (pressed) 50 else 190), label = "press")
-    this.graphicsLayer { alpha = a }.combinedClickable(
+    this.graphicsLayer { alpha = if (pressed) 0.5f else 1f }.combinedClickable(
         interactionSource = src, indication = null, role = Role.Button, onClick = onClick, onLongClick = onLongClick,
     )
 }
@@ -593,8 +596,7 @@ private fun Modifier.softCombined(onClick: () -> Unit, onLongClick: (() -> Unit)
 private fun Modifier.softClick(role: Role? = null, onClick: () -> Unit): Modifier = composed {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
-    val a by animateFloatAsState(if (pressed) 0.5f else 1f, tw(if (pressed) 50 else 190), label = "press")
-    this.graphicsLayer { alpha = a }.clickable(interactionSource = src, indication = null, role = role, onClick = onClick)
+    this.graphicsLayer { alpha = if (pressed) 0.5f else 1f }.clickable(interactionSource = src, indication = null, role = role, onClick = onClick)
 }
 
 @Composable
@@ -639,8 +641,6 @@ private fun Home(
     Column(
         Modifier
             .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
-            .padding(horizontal = 32.dp)
             // Blank space: double tap = sleep, long press = settings.
             .pointerInput(gesturesEnabled) {
                 if (gesturesEnabled) {
@@ -660,6 +660,7 @@ private fun Home(
                     var dx = 0f
                     var dy = 0f
                     var held = false
+                    val slop = viewConfiguration.touchSlop * 1.4f
                     var axis = 0 // 0 = undecided, 1 = pulling the app list up, 2 = pulling the widgets page in
                     var swallow = false
                     while (true) {
@@ -672,26 +673,26 @@ private fun Home(
                         dy += delta.y
                         if (axis != 0 || swallow) {
                             change.consume() // the rest of this gesture belongs to the swipe, not the app under it
-                            if (axis == 1) curDrag(if (cfg.drawerRight) -dx / size.width else -dy / size.height)
-                            if (axis == 2) curWDrag(dx / size.width)
+                            if (axis == 1) curDrag(if (cfg.drawerRight) -dx / (size.width * 0.8f) else -dy / (size.height * 0.8f))
+                            if (axis == 2) curWDrag(dx / (size.width * 0.8f))
                             continue
                         }
                         // A press-and-hold is a long press (Settings), not a swipe.
                         if (change.uptimeMillis - startTime >= 450L && abs(dx) + abs(dy) < 24f) held = true
                         if (held) continue
-                        if (!cfg.drawerRight && dy < -36f && abs(dy) > 1.5f * abs(dx)) {
+                        if (!cfg.drawerRight && -dy > slop && -dy > 0.9f * abs(dx)) {
                             axis = 1
                             change.consume()
-                            curDrag(-dy / size.height)
-                        } else if (cfg.drawerRight && dx < -28f && abs(dx) > 1.2f * abs(dy)) {
+                            curDrag(-dy / (size.height * 0.8f))
+                        } else if (cfg.drawerRight && -dx > slop && -dx > 0.9f * abs(dy)) {
                             axis = 1
                             change.consume()
-                            curDrag(-dx / size.width)
-                        } else if (cfg.widgetsOn && dx > 28f && dx > 1.2f * abs(dy)) {
+                            curDrag(-dx / (size.width * 0.8f))
+                        } else if (cfg.widgetsOn && dx > slop && dx > 0.9f * abs(dy)) {
                             axis = 2
                             change.consume()
-                            curWDrag(dx / size.width)
-                        } else if (dy > 90f && dy > 1.5f * abs(dx)) {
+                            curWDrag(dx / (size.width * 0.8f))
+                        } else if (dy > slop * 2f && dy > abs(dx)) {
                             change.consume()
                             curNotifications()
                             swallow = true
@@ -700,7 +701,9 @@ private fun Home(
                     if (axis == 1) curEnd(if (cfg.drawerRight) tracker.calculateVelocity().x else tracker.calculateVelocity().y)
                     if (axis == 2) curWEnd(tracker.calculateVelocity().x)
                 }
-            },
+            }
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
+            .padding(horizontal = 32.dp),
     ) {
         Spacer(Modifier.height(64.dp))
         Column(Modifier.fillMaxWidth()) {
@@ -786,6 +789,7 @@ private fun Drawer(
     apps: List<App>,
     pinned: Set<String>,
     fromRight: Boolean,
+    active: Boolean,
     progress: () -> Float,
     onLaunch: (App) -> Unit,
     onTogglePin: (App) -> Unit,
@@ -803,6 +807,7 @@ private fun Drawer(
         }.toSortedMap()
     }
     val listState = rememberLazyListState()
+    LaunchedEffect(active) { if (!active) { query = ""; listState.scrollToItem(0) } }
     val haptic = LocalHapticFeedback.current
     var activeLetter by remember { mutableStateOf<Char?>(null) }
     val letters = remember(groups) { groups.keys.toList() }
@@ -840,8 +845,8 @@ private fun Drawer(
                         dy += delta.y
                     }
                     if (fromRight) {
-                        if (!inStrip && dx > 120f && abs(dx) > 2f * abs(dy)) onClose()
-                    } else if (!inStrip && abs(dy) > 140f && abs(dy) > 2f * abs(dx)) {
+                        if (!inStrip && dx > 80f && abs(dx) > 1.3f * abs(dy)) onClose()
+                    } else if (!inStrip && abs(dy) > 90f && abs(dy) > 1.3f * abs(dx)) {
                         if (dy > 0f && startedAtTop && !listState.canScrollBackward) onClose()
                     }
                 }
@@ -2017,8 +2022,6 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> Un
         Column(
             Modifier
                 .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
-                .padding(horizontal = 32.dp)
                 // Swipe left to push the page back off to the left. Follows the finger; widgets keep their touches
                 // unless the drag is clearly horizontal.
                 .pointerInput(editing) {
@@ -2037,15 +2040,17 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> Un
                             tracker.addPosition(change.uptimeMillis, change.position)
                             val d = change.positionChange()
                             dx += d.x; dy += d.y
-                            if (!pulling && !innerScrolling && dx < -36f && abs(dx) > 2f * abs(dy)) pulling = true
+                            if (!pulling && !innerScrolling && dx < -viewConfiguration.touchSlop * 1.4f && abs(dx) > 1.1f * abs(dy)) pulling = true
                             if (pulling) {
                                 change.consume()
-                                curDrag(1f + dx / size.width)
+                                curDrag(1f + dx / (size.width * 0.8f))
                             }
                         }
                         if (pulling) curEnd(tracker.calculateVelocity().x)
                     }
-                },
+                }
+                .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
+                .padding(horizontal = 32.dp),
         ) {
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 BasicText("Widgets", style = ts(p.ink, 34.sp), modifier = Modifier.weight(1f))
