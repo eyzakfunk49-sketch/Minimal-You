@@ -93,6 +93,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -306,6 +309,9 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     // The search page rises from the bottom exactly like the app list: it follows the finger, then settles.
     val searchP = remember { Animatable(0f) }
     LaunchedEffect(searchOpen) { searchP.animateTo(if (searchOpen) 1f else 0f, drawerSpec) }
+    val settingsP = remember { Animatable(0f) }
+    LaunchedEffect(settingsOpen) { settingsP.animateTo(if (settingsOpen) 1f else 0f, drawerSpec) }
+    val settingsVisible by remember { derivedStateOf { settingsP.value > 0.001f } }
     val searchVisible by remember { derivedStateOf { searchP.value > 0.001f } }
     val widgetsP = remember { Animatable(0f) }
     LaunchedEffect(widgetsOpen) { widgetsP.animateTo(if (widgetsOpen) 1f else 0f, drawerSpec) }
@@ -471,7 +477,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             Box(Modifier.fillMaxSize().graphicsLayer {
                 translationX = widgetsP.value * size.width * 0.22f - (if (cfg.drawerRight) drawerP.value * size.width * 0.22f else 0f)
                 translationY = -((if (cfg.drawerRight) 0f else drawerP.value) + searchP.value) * size.height * 0.22f
-                alpha = (1f - drawerP.value - widgetsP.value - searchP.value).coerceIn(0f, 1f)
+                alpha = (1f - drawerP.value - widgetsP.value - searchP.value - settingsP.value).coerceIn(0f, 1f)
             }) {
             Home(
                 p, cfg, favorites, weather, event,
@@ -570,11 +576,10 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     )
                 }
             }
-            AnimatedVisibility(
-                visible = settingsOpen,
-                enter = screenEnter(),
-                exit = screenExit(),
-            ) {
+            if (settingsVisible) Box(Modifier.fillMaxSize().graphicsLayer {
+                translationY = (1f - settingsP.value) * size.height * 0.05f
+                alpha = (settingsP.value * 1.6f).coerceIn(0f, 1f)
+            }) {
                 SettingsScreen(
                     p, cfg, updateCfg,
                     favorites = favorites, apps = apps, onSetFavs = setFavs,
@@ -1342,15 +1347,17 @@ private fun SettingsScreen(
         AnimatedContent(
             targetState = page,
             transitionSpec = {
-                if (!animationsOn) {
+                val forward = targetState != null
+                val spec = if (!animationsOn) {
                     EnterTransition.None togetherWith ExitTransition.None
-                } else if (targetState != null) {
-                    (slideInHorizontally(tw(300, easing = EmphasizedDecel)) { it / 4 } + fadeIn(tw(220, easing = EmphasizedDecel))) togetherWith
-                        (slideOutHorizontally(tw(220, easing = EmphasizedAccel)) { -it / 6 } + fadeOut(tw(140, easing = EmphasizedAccel)))
                 } else {
-                    (slideInHorizontally(tw(300, easing = EmphasizedDecel)) { -it / 6 } + fadeIn(tw(220, easing = EmphasizedDecel))) togetherWith
-                        (slideOutHorizontally(tw(220, easing = EmphasizedAccel)) { it / 4 } + fadeOut(tw(140, easing = EmphasizedAccel)))
+                    // The old page clears out quickly, then the new one glides in: they never overlap, so nothing ghosts.
+                    (slideInHorizontally(tween(340, easing = EmphasizedDecel)) { if (forward) it / 10 else -it / 10 } +
+                        fadeIn(tween(220, delayMillis = 90, easing = LinearOutSlowInEasing))) togetherWith
+                        (slideOutHorizontally(tween(160, easing = EmphasizedAccel)) { if (forward) -it / 12 else it / 12 } +
+                            fadeOut(tween(90, easing = LinearEasing)))
                 }
+                spec.using(SizeTransform(clip = false) { _, _ -> snap() })
             },
             label = "settingsPage",
         ) { target ->
@@ -2394,12 +2401,17 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> Un
                             val r = rt.toRoot(change.position)
                             tracker.addPosition(change.uptimeMillis, r)
                             dx = r.x - r0.x; dy = r.y - r0.y
-                            if (!pulling && !innerScrolling && dx < -3.dp.toPx() && abs(dx) > 0.8f * abs(dy)) pulling = true
+                            // A widget with its own scrolling content only loses the gesture to a clear, flat swipe.
+                            val clear = if (innerScrolling) dx < -12.dp.toPx() && abs(dx) > 2f * abs(dy)
+                                else dx < -3.dp.toPx() && abs(dx) > 0.6f * abs(dy)
+                            if (!pulling && clear) pulling = true
                             if (pulling) {
                                 change.consume()
                                 curDrag(1f + dx / size.width.toFloat())
                             }
                         }
+                        // The widget view can swallow its own lift event, which used to leave this stuck on.
+                        innerScrolling = false
                         if (pulling) curEnd(tracker.calculateVelocity().x)
                     }
                 }
