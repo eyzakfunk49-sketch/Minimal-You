@@ -273,15 +273,16 @@ data class Palette(val bg: Color, val ink: Color, val muted: Color, val accent: 
 
 /** Colors come from the system's wallpaper-based Material You palette (Android 12+). */
 @Composable
-internal fun palette(): Palette {
+internal fun palette(pitchBlack: Boolean = false): Palette {
     val ctx = LocalContext.current
     fun c(id: Int) = Color(ctx.getColor(id))
     return if (isSystemInDarkTheme()) Palette(
-        bg = c(android.R.color.system_neutral1_900),
+        // Pitch black swaps the grey background for true black; cards stay a dark grey so they still stand out.
+        bg = if (pitchBlack) Color.Black else c(android.R.color.system_neutral1_900),
         ink = c(android.R.color.system_neutral1_10),
         muted = c(android.R.color.system_neutral2_200),
         accent = c(android.R.color.system_accent1_100),
-        pill = c(android.R.color.system_neutral1_800),
+        pill = c(if (pitchBlack) android.R.color.system_neutral1_900 else android.R.color.system_neutral1_800),
     ) else Palette(
         bg = c(android.R.color.system_neutral1_50),
         ink = c(android.R.color.system_neutral1_1000),
@@ -310,10 +311,10 @@ internal fun ts(
 @Composable
 fun LauncherApp(homePress: Int, resumes: Int) {
     val ctx = LocalContext.current
-    val p = palette()
     var apps by remember { mutableStateOf(emptyList<App>()) }
     var favKeys by remember { mutableStateOf(readFavs(ctx)) } // null = use defaults
     var cfg by remember { mutableStateOf(loadConfig(ctx)) }
+    val p = palette(cfg.pitchBlack)
     var weather by remember { mutableStateOf<Weather?>(null) }
     var event by remember { mutableStateOf<Event?>(null) }
     var drawerOpen by remember { mutableStateOf(false) }
@@ -476,11 +477,9 @@ fun LauncherApp(homePress: Int, resumes: Int) {
         LaunchedEffect(exclusionOn) { moveEdgeExclusion(if (lastTouch.y > 0f) lastTouch.y else view.height * 0.65f) }
         LaunchedEffect(resumes) { launching = false }
         LaunchedEffect(launching) { if (launching) { delay(2500); launching = false } }
-        // Android slides the new app in from the right and a launcher can't change that, so Home steps aside
-        // to the left as it does: together they read as one push transition instead of two unrelated motions.
-        val push by animateFloatAsState(
-            if (launching) 1f else 0f,
-            tw(if (launching) 380 else 420, easing = EmphasizedDecel), label = "push",
+        val zoom by animateFloatAsState(
+            if (launching) 0.94f else 1f,
+            tw(if (launching) 320 else 380, easing = EmphasizedDecel), label = "zoom",
         )
         val fade by animateFloatAsState(
             // Stays mostly visible so there is never a dark gap while the app window is still starting.
@@ -491,8 +490,11 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    translationX = -push * size.width * 0.2f
-                    alpha = fade
+                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(
+                        (lastTouch.x / size.width.coerceAtLeast(1f)).coerceIn(0f, 1f),
+                        (lastTouch.y / size.height.coerceAtLeast(1f)).coerceIn(0f, 1f),
+                    )
+                    scaleX = zoom; scaleY = zoom; alpha = fade
                 }
                 .background(p.bg)
                 .pointerInput(Unit) {

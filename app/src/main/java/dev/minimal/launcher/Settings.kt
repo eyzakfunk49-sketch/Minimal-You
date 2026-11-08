@@ -608,6 +608,12 @@ internal fun SettingsScreen(
 
                         SettingsPage.LOOK -> {
                             settingsBlock {
+                                SettingsGroup(p, "Background") {
+                                    SwitchRow("Pitch black", cfg.pitchBlack, p) { onConfig(cfg.copy(pitchBlack = it)) }
+                                }
+                                Caption(p, "Turns the dark grey background true black. Only applies in dark mode.")
+                            }
+                            settingsBlock {
                                 SettingsGroup(p, "Font") {
                                     val fc = LocalContext.current
                                     val fontPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->

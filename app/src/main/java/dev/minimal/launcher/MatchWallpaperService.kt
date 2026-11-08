@@ -52,12 +52,16 @@ class MatchWallpaperService : WallpaperService() {
         }
 
         private fun draw() {
-            val holder = surfaceHolder ?: return
-            val canvas = try { holder.lockCanvas() } catch (_: Exception) { null } ?: return
+            val holder = surfaceHolder
+            var canvas: android.graphics.Canvas? = null
+            try { canvas = holder.lockCanvas() } catch (_: Exception) { }
+            if (canvas == null) return
             try {
                 val dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+                val black = dark && getSharedPreferences("minimal", MODE_PRIVATE).getBoolean("pitchBlack", false)
                 canvas.drawColor(
-                    getColor(if (dark) android.R.color.system_neutral1_900 else android.R.color.system_neutral1_50),
+                    if (black) Color.BLACK
+                    else getColor(if (dark) android.R.color.system_neutral1_900 else android.R.color.system_neutral1_50),
                 )
             } finally {
                 holder.unlockCanvasAndPost(canvas)

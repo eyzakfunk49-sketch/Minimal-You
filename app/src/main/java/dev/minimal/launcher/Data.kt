@@ -173,6 +173,7 @@ data class Config(
     val showBattery: Boolean = true,
     val showClock: Boolean = true,
     val homeAlign: HomeAlign = HomeAlign.LEFT,
+    val pitchBlack: Boolean = false,
     val customFontName: String = "",
     val customFontStamp: Long = 0L,
     val centerApps: Boolean = false,
@@ -220,6 +221,7 @@ fun loadConfig(ctx: Context): Config {
         showBattery = p.getBoolean("showBattery", true),
         showClock = p.getBoolean("showClock", true),
         homeAlign = p.readEnum("homeAlign", HomeAlign.LEFT),
+        pitchBlack = p.getBoolean("pitchBlack", false),
         customFontName = p.getString("customFontName", "") ?: "",
         customFontStamp = p.getLong("customFontStamp", 0L),
         centerApps = p.getBoolean("centerApps", false),
@@ -258,6 +260,7 @@ fun saveConfig(ctx: Context, c: Config) {
         .putBoolean("showBattery", c.showBattery)
         .putBoolean("showClock", c.showClock)
         .putString("homeAlign", c.homeAlign.name)
+        .putBoolean("pitchBlack", c.pitchBlack)
         .putString("customFontName", c.customFontName)
         .putLong("customFontStamp", c.customFontStamp)
         .putBoolean("centerApps", c.centerApps)
