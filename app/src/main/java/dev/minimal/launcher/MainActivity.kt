@@ -1,18 +1,23 @@
 package dev.minimal.launcher
 
+import android.Manifest
+import android.accessibilityservice.AccessibilityService
 import android.content.BroadcastReceiver
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.graphics.Typeface
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
 import android.text.format.DateFormat
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -23,53 +28,33 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBars
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.State
-import androidx.compose.runtime.compositionLocalOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -81,18 +66,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import android.accessibilityservice.AccessibilityService
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.unit.Velocity
+import java.net.URLEncoder
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val MAX_FAVORITES = 6
@@ -113,42 +96,46 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// ---------- Model ----------
+// ---------- Actions ----------
 
-data class App(val label: String, val component: ComponentName) {
-    val key: String get() = component.flattenToString()
-}
-
-/** Fonts that ship with Android, so nothing needs to be bundled. */
-enum class AppFont(val label: String, val family: FontFamily) {
-    SANS("Sans", FontFamily.SansSerif),
-    CONDENSED("Condensed", FontFamily(Typeface.create("sans-serif-condensed", Typeface.NORMAL))),
-    SERIF("Serif", FontFamily.Serif),
-    MONO("Monospace", FontFamily.Monospace),
-    CASUAL("Casual", FontFamily(Typeface.create("casual", Typeface.NORMAL))),
-}
-
-@Suppress("DEPRECATION")
-private fun loadApps(ctx: Context): List<App> {
-    val pm = ctx.packageManager
-    val query = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-    return pm.queryIntentActivities(query, 0)
-        .filter { it.activityInfo.packageName != ctx.packageName }
-        .map {
-            App(
-                it.loadLabel(pm).toString(),
-                ComponentName(it.activityInfo.packageName, it.activityInfo.name),
-            )
-        }
-        .sortedBy { it.label.lowercase() }
-}
-
-private fun launch(ctx: Context, app: App) {
+private fun openApp(ctx: Context, app: App) {
     val intent = Intent(Intent.ACTION_MAIN)
         .addCategory(Intent.CATEGORY_LAUNCHER)
         .setComponent(app.component)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
     try { ctx.startActivity(intent) } catch (_: Exception) { }
+}
+
+private fun openUri(ctx: Context, uri: Uri, mime: String? = null) {
+    val intent = Intent(Intent.ACTION_VIEW)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    if (mime != null) intent.setDataAndType(uri, mime) else intent.data = uri
+    try {
+        ctx.startActivity(intent)
+    } catch (_: Exception) {
+        Toast.makeText(ctx, "No app can open this", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun openUrl(ctx: Context, url: String) = openUri(ctx, Uri.parse(url))
+
+/** Things on Home that open an app of your choice when tapped. */
+private enum class Slot(val label: String, val match: String) {
+    CLOCK("Clock", "clock"),
+    CALENDAR("Date and calendar", "calendar"),
+    WEATHER("Weather", "weather"),
+}
+
+private fun Config.appFor(slot: Slot): String = when (slot) {
+    Slot.CLOCK -> clockApp
+    Slot.CALENDAR -> calendarApp
+    Slot.WEATHER -> weatherApp
+}
+
+private fun Config.withApp(slot: Slot, key: String): Config = when (slot) {
+    Slot.CLOCK -> copy(clockApp = key)
+    Slot.CALENDAR -> copy(calendarApp = key)
+    Slot.WEATHER -> copy(weatherApp = key)
 }
 
 /** Lock screen / notification shade need the accessibility service (see GestureService). */
@@ -164,27 +151,6 @@ private fun globalAction(ctx: Context, action: Int) {
         )
     }
 }
-
-private fun prefs(ctx: Context) = ctx.getSharedPreferences("minimal", Context.MODE_PRIVATE)
-
-private fun readFavs(ctx: Context): List<String>? =
-    prefs(ctx).getString("favs", null)?.split("\n")?.filter { it.isNotBlank() }
-
-private fun writeFavs(ctx: Context, keys: List<String>) {
-    prefs(ctx).edit().putString("favs", keys.joinToString("\n")).apply()
-}
-
-private fun readFont(ctx: Context): AppFont =
-    AppFont.entries.firstOrNull { it.name == prefs(ctx).getString("font", null) } ?: AppFont.SANS
-
-private fun writeFont(ctx: Context, font: AppFont) {
-    prefs(ctx).edit().putString("font", font.name).apply()
-}
-
-private fun defaultFavorites(apps: List<App>): List<App> =
-    listOf("phone", "messages", "camera", "notes")
-        .mapNotNull { name -> apps.firstOrNull { it.label.contains(name, ignoreCase = true) } }
-        .distinct()
 
 // ---------- Look (Material You) ----------
 
@@ -232,16 +198,56 @@ fun LauncherApp(homePress: Int) {
     val p = palette()
     var apps by remember { mutableStateOf(emptyList<App>()) }
     var favKeys by remember { mutableStateOf(readFavs(ctx)) } // null = use defaults
-    var font by remember { mutableStateOf(readFont(ctx)) }
+    var cfg by remember { mutableStateOf(loadConfig(ctx)) }
+    var weather by remember { mutableStateOf<Weather?>(null) }
+    var event by remember { mutableStateOf<Event?>(null) }
     var drawerOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var searchOpen by remember { mutableStateOf(false) }
+    var pickSlot by remember { mutableStateOf<Slot?>(null) }
 
-    LaunchedEffect(drawerOpen, settingsOpen, homePress) {
+    val updateCfg: (Config) -> Unit = { next ->
+        cfg = next
+        saveConfig(ctx, next)
+    }
+
+    LaunchedEffect(drawerOpen, settingsOpen, searchOpen, homePress) {
         apps = withContext(Dispatchers.Default) { loadApps(ctx) }
     }
-    LaunchedEffect(homePress) { drawerOpen = false; settingsOpen = false }
+    LaunchedEffect(homePress) { drawerOpen = false; settingsOpen = false; searchOpen = false; pickSlot = null }
     BackHandler(enabled = drawerOpen) { drawerOpen = false }
-    BackHandler(enabled = settingsOpen) { settingsOpen = false } // registered last = handled first
+    BackHandler(enabled = searchOpen) { searchOpen = false }
+    BackHandler(enabled = settingsOpen) { settingsOpen = false }
+    BackHandler(enabled = pickSlot != null) { pickSlot = null } // registered last = handled first
+
+    // Weather: refresh every 30 minutes while a city is set.
+    LaunchedEffect(cfg.weatherOn, cfg.city, cfg.lat, cfg.lon, cfg.fahrenheit) {
+        if (!cfg.weatherOn || cfg.city.isBlank()) {
+            weather = null
+            return@LaunchedEffect
+        }
+        while (true) {
+            val w = withContext(Dispatchers.IO) { fetchWeather(cfg.lat, cfg.lon, cfg.fahrenheit) }
+            if (w != null) {
+                weather = w
+                delay(30 * 60 * 1000L)
+            } else {
+                delay(60 * 1000L)
+            }
+        }
+    }
+
+    // Calendar: next event, refreshed every minute and when returning from Settings.
+    LaunchedEffect(cfg.calendarOn, settingsOpen, homePress) {
+        if (!cfg.calendarOn) {
+            event = null
+            return@LaunchedEffect
+        }
+        while (true) {
+            event = withContext(Dispatchers.IO) { queryNextEvent(ctx) }
+            delay(60 * 1000L)
+        }
+    }
 
     val favorites = remember(apps, favKeys) {
         val keys = favKeys
@@ -264,16 +270,25 @@ fun LauncherApp(homePress: Int) {
         }
     }
 
-    CompositionLocalProvider(LocalFont provides font.family) {
+    val openSlot: (Slot) -> Unit = { slot ->
+        val chosen = apps.firstOrNull { it.key == cfg.appFor(slot) }
+        val app = chosen ?: apps.firstOrNull { it.label.contains(slot.match, ignoreCase = true) }
+        if (app != null) openApp(ctx, app)
+        else Toast.makeText(ctx, "Pick a ${slot.label.lowercase()} app in Settings", Toast.LENGTH_SHORT).show()
+    }
+
+    CompositionLocalProvider(LocalFont provides cfg.font.family) {
         Box(Modifier.fillMaxSize().background(p.bg)) {
             Home(
-                p, favorites,
+                p, cfg, favorites, weather, event,
                 onOpenDrawer = { drawerOpen = true },
+                onOpenSearch = { searchOpen = true },
                 onSettings = { settingsOpen = true },
                 onSleep = { globalAction(ctx, AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN) },
                 onNotifications = { globalAction(ctx, AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS) },
-                gesturesEnabled = !drawerOpen && !settingsOpen,
-                onLaunch = { launch(ctx, it) },
+                gesturesEnabled = !drawerOpen && !settingsOpen && !searchOpen,
+                onLaunch = { openApp(ctx, it) },
+                onSlot = openSlot,
             )
             AnimatedVisibility(
                 visible = drawerOpen,
@@ -282,10 +297,17 @@ fun LauncherApp(homePress: Int) {
             ) {
                 Drawer(
                     p, apps, favorites.map { it.key }.toSet(),
-                    onLaunch = { launch(ctx, it) },
+                    onLaunch = { openApp(ctx, it) },
                     onTogglePin = togglePin,
                     onClose = { drawerOpen = false },
                 )
+            }
+            AnimatedVisibility(
+                visible = searchOpen,
+                enter = slideInVertically { it / 3 } + fadeIn(),
+                exit = slideOutVertically { it / 3 } + fadeOut(),
+            ) {
+                SearchScreen(p, cfg, apps, onClose = { searchOpen = false })
             }
             AnimatedVisibility(
                 visible = settingsOpen,
@@ -293,10 +315,18 @@ fun LauncherApp(homePress: Int) {
                 exit = slideOutVertically { it / 3 } + fadeOut(),
             ) {
                 SettingsScreen(
-                    p, font,
-                    onFont = { font = it; writeFont(ctx, it) },
+                    p, cfg, updateCfg,
                     favorites = favorites, apps = apps, onSetFavs = setFavs,
+                    onPickSlot = { pickSlot = it },
                     onBack = { settingsOpen = false },
+                )
+            }
+            val slot = pickSlot
+            if (slot != null) {
+                AppPicker(
+                    p, slot, apps,
+                    onPick = { app -> updateCfg(cfg.withApp(slot, app?.key ?: "")); pickSlot = null },
+                    onCancel = { pickSlot = null },
                 )
             }
         }
@@ -326,20 +356,43 @@ private fun rememberNow(): State<LocalDateTime> {
 // ---------- Home ----------
 
 @Composable
+private fun ClockText(p: Palette, style: ClockStyle, now: LocalDateTime, is24: Boolean) {
+    fun f(pattern: String): String = now.format(DateTimeFormatter.ofPattern(pattern))
+    val hm = f(if (is24) "H:mm" else "h:mm")
+    when (style) {
+        ClockStyle.LARGE -> BasicText(hm, style = ts(p.ink, 96.sp, FontWeight.Light, (-4).sp, 104.sp))
+        ClockStyle.BOLD -> BasicText(hm, style = ts(p.ink, 96.sp, FontWeight.Bold, (-4).sp, 104.sp))
+        ClockStyle.COMPACT -> BasicText(hm, style = ts(p.ink, 48.sp, FontWeight.Normal, (-1).sp, 56.sp))
+        ClockStyle.STACKED -> Column {
+            BasicText(f(if (is24) "HH" else "h"), style = ts(p.ink, 88.sp, FontWeight.Light, (-2).sp, 84.sp))
+            BasicText(f("mm"), style = ts(p.accent, 88.sp, FontWeight.Light, (-2).sp, 84.sp))
+        }
+    }
+}
+
+@Composable
 private fun Home(
     p: Palette,
+    cfg: Config,
     favorites: List<App>,
+    weather: Weather?,
+    event: Event?,
     onOpenDrawer: () -> Unit,
+    onOpenSearch: () -> Unit,
     onSettings: () -> Unit,
     onSleep: () -> Unit,
     onNotifications: () -> Unit,
     gesturesEnabled: Boolean,
     onLaunch: (App) -> Unit,
+    onSlot: (Slot) -> Unit,
 ) {
     val ctx = LocalContext.current
     val now by rememberNow()
-    val time = now.format(DateTimeFormatter.ofPattern(if (DateFormat.is24HourFormat(ctx)) "H:mm" else "h:mm"))
-    val date = now.format(DateTimeFormatter.ofPattern("EEEE, d MMMM"))
+    val is24 = when (cfg.hours) {
+        HourFormat.SYSTEM -> DateFormat.is24HourFormat(ctx)
+        HourFormat.H12 -> false
+        HourFormat.H24 -> true
+    }
 
     Column(
         Modifier
@@ -369,18 +422,54 @@ private fun Home(
     ) {
         Spacer(Modifier.height(64.dp))
         Column(Modifier.fillMaxWidth()) {
-            BasicText(date, style = ts(p.muted, 15.sp, FontWeight.Normal))
-            BasicText(time, style = ts(p.ink, 96.sp, FontWeight.Light, (-4).sp, 104.sp))
+            val datePattern = cfg.date.pattern
+            if (datePattern != null) {
+                BasicText(
+                    now.format(DateTimeFormatter.ofPattern(datePattern)),
+                    style = ts(p.muted, 15.sp, FontWeight.Normal),
+                    modifier = Modifier
+                        .heightIn(min = 40.dp)
+                        .clickable(role = Role.Button) { onSlot(Slot.CALENDAR) }
+                        .wrapContentHeight(Alignment.CenterVertically),
+                )
+            }
+            Box(Modifier.clickable(role = Role.Button) { onSlot(Slot.CLOCK) }) {
+                ClockText(p, cfg.clock, now, is24)
+            }
+            if (weather != null) {
+                val line = listOf("${weather.temp}°", describe(weather.code))
+                    .filter { it.isNotEmpty() }.joinToString(" · ")
+                BasicText(
+                    line,
+                    style = ts(p.accent, 15.sp, FontWeight.Medium),
+                    modifier = Modifier
+                        .heightIn(min = 40.dp)
+                        .clickable(role = Role.Button) { onSlot(Slot.WEATHER) }
+                        .wrapContentHeight(Alignment.CenterVertically),
+                )
+            }
+            if (event != null) {
+                BasicText(
+                    formatEvent(event, is24),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = ts(p.muted, 15.sp, FontWeight.Normal),
+                    modifier = Modifier
+                        .heightIn(min = 40.dp)
+                        .clickable(role = Role.Button) { onSlot(Slot.CALENDAR) }
+                        .wrapContentHeight(Alignment.CenterVertically),
+                )
+            }
         }
         Spacer(Modifier.weight(1f))
         favorites.forEach {
             AppRow(it, 30.sp, p.ink, onClick = { onLaunch(it) }, weight = FontWeight.Normal)
         }
         Spacer(Modifier.height(32.dp))
-        Pill(p, Modifier.clickable(role = Role.Button, onClick = onOpenDrawer)) {
+        Pill(p, Modifier.clickable(role = Role.Button, onClick = onOpenSearch)) {
             SearchIcon(p.accent)
             Spacer(Modifier.width(12.dp))
-            BasicText("Search apps", style = ts(p.muted, 16.sp, FontWeight.Normal))
+            BasicText("Search anything", style = ts(p.muted, 16.sp, FontWeight.Normal))
         }
         Spacer(Modifier.height(24.dp))
     }
@@ -422,10 +511,6 @@ private fun Drawer(
                 }
                 return Offset.Zero
             }
-            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                pulled = 0f
-                return Velocity.Zero
-            }
         }
     }
 
@@ -462,7 +547,7 @@ private fun Drawer(
                 modifier = Modifier.weight(1f),
                 decorationBox = { inner ->
                     Box(contentAlignment = Alignment.CenterStart) {
-                        if (query.isEmpty()) BasicText("Search", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                        if (query.isEmpty()) BasicText("Search apps", style = ts(p.muted, 16.sp, FontWeight.Normal))
                         inner()
                     }
                 },
@@ -491,23 +576,171 @@ private fun Drawer(
     }
 }
 
+// ---------- Universal search ----------
+
+@Composable
+private fun SearchScreen(p: Palette, cfg: Config, apps: List<App>, onClose: () -> Unit) {
+    val ctx = LocalContext.current
+    var query by remember { mutableStateOf("") }
+    var contacts by remember { mutableStateOf(emptyList<ContactHit>()) }
+    var files by remember { mutableStateOf(emptyList<FileHit>()) }
+    val focus = remember { FocusRequester() }
+    val q = query.trim()
+
+    val appHits = remember(apps, q, cfg.searchApps) {
+        if (!cfg.searchApps || q.isEmpty()) emptyList<App>()
+        else apps.filter { it.label.contains(q, ignoreCase = true) }.take(6)
+    }
+
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    LaunchedEffect(q, cfg.searchContacts, cfg.searchFiles) {
+        if (q.isEmpty()) {
+            contacts = emptyList()
+            files = emptyList()
+            return@LaunchedEffect
+        }
+        delay(150)
+        contacts = if (cfg.searchContacts) withContext(Dispatchers.IO) { searchContacts(ctx, q) } else emptyList()
+        files = if (cfg.searchFiles) withContext(Dispatchers.IO) { searchFiles(ctx, q) } else emptyList()
+    }
+
+    val webSearchUrl = cfg.engine.base + URLEncoder.encode(q, "UTF-8")
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(p.bg)
+            .windowInsetsPadding(WindowInsets.systemBars)
+            .imePadding()
+            .padding(horizontal = 32.dp)
+            .pointerInput(Unit) {
+                var total = 0f
+                detectVerticalDragGestures(
+                    onDragStart = { total = 0f },
+                    onDragEnd = { if (total > 120f) onClose() },
+                    onDragCancel = {},
+                    onVerticalDrag = { _, dy -> total += dy },
+                )
+            },
+    ) {
+        Spacer(Modifier.height(24.dp))
+        Pill(p) {
+            SearchIcon(p.accent)
+            Spacer(Modifier.width(12.dp))
+            BasicTextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                textStyle = ts(p.ink, 16.sp, FontWeight.Normal),
+                cursorBrush = SolidColor(p.accent),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = {
+                    val top = appHits.firstOrNull()
+                    if (top != null) {
+                        openApp(ctx, top)
+                        onClose()
+                    } else if (q.isNotEmpty() && cfg.searchWeb) {
+                        openUrl(ctx, webSearchUrl)
+                        onClose()
+                    }
+                }),
+                modifier = Modifier.weight(1f).focusRequester(focus),
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) BasicText("Search anything", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                        inner()
+                    }
+                },
+            )
+        }
+        LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+            if (q.isEmpty()) {
+                item {
+                    val sources = listOfNotNull(
+                        "apps".takeIf { cfg.searchApps },
+                        "contacts".takeIf { cfg.searchContacts },
+                        "files".takeIf { cfg.searchFiles },
+                        "the web".takeIf { cfg.searchWeb },
+                    )
+                    BasicText(
+                        if (sources.isEmpty()) "Nothing is turned on. Pick search sources in Settings."
+                        else "Searching " + sources.joinToString(", ") + ".",
+                        style = ts(p.muted, 15.sp, FontWeight.Normal),
+                        modifier = Modifier.padding(top = 24.dp),
+                    )
+                }
+            } else {
+                if (cfg.searchWeb) {
+                    item {
+                        WebRow(p, "Search ${cfg.engine.label} for “$q”") {
+                            openUrl(ctx, webSearchUrl)
+                            onClose()
+                        }
+                    }
+                    if (isUrl(q)) {
+                        item {
+                            WebRow(p, "Open $q") {
+                                openUrl(ctx, normalizeUrl(q))
+                                onClose()
+                            }
+                        }
+                    }
+                }
+                if (appHits.isNotEmpty()) {
+                    item { SectionTitle("Apps", p) }
+                    items(appHits, key = { "app" + it.key }) { app ->
+                        AppRow(app, 22.sp, p.ink, onClick = { openApp(ctx, app); onClose() })
+                    }
+                }
+                if (contacts.isNotEmpty()) {
+                    item { SectionTitle("Contacts", p) }
+                    items(contacts, key = { "contact" + it.uri.toString() }) { c ->
+                        TextRow(c.name, null, p) { openUri(ctx, c.uri); onClose() }
+                    }
+                }
+                if (files.isNotEmpty()) {
+                    item { SectionTitle("Files", p) }
+                    items(files, key = { "file" + it.uri.toString() }) { f ->
+                        TextRow(f.name, f.mime, p) { openUri(ctx, f.uri, f.mime); onClose() }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ---------- Settings ----------
 
 @Composable
 private fun SettingsScreen(
     p: Palette,
-    font: AppFont,
-    onFont: (AppFont) -> Unit,
+    cfg: Config,
+    onConfig: (Config) -> Unit,
     favorites: List<App>,
     apps: List<App>,
     onSetFavs: (List<String>) -> Unit,
+    onPickSlot: (Slot) -> Unit,
     onBack: () -> Unit,
 ) {
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val now by rememberNow()
     var adding by remember { mutableStateOf(false) }
+    var cityInput by remember { mutableStateOf(cfg.city) }
     val favKeys = favorites.map { it.key }
     val full = favKeys.size >= MAX_FAVORITES
     val addable = remember(apps, favKeys) { apps.filter { it.key !in favKeys } }
+
+    fun has(permission: String) = ctx.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+
+    val contactsPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) onConfig(cfg.copy(searchContacts = true))
+        else Toast.makeText(ctx, "Contacts permission was denied", Toast.LENGTH_SHORT).show()
+    }
+    val calendarPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) onConfig(cfg.copy(calendarOn = true))
+        else Toast.makeText(ctx, "Calendar permission was denied", Toast.LENGTH_SHORT).show()
+    }
 
     fun move(i: Int, delta: Int) {
         val j = i + delta
@@ -515,6 +748,20 @@ private fun SettingsScreen(
         val list = favKeys.toMutableList()
         val t = list[i]; list[i] = list[j]; list[j] = t
         onSetFavs(list)
+    }
+
+    fun setCity() {
+        val name = cityInput.trim()
+        if (name.isEmpty()) return
+        scope.launch {
+            val hit = withContext(Dispatchers.IO) { geocode(name) }
+            if (hit != null) {
+                onConfig(cfg.copy(city = hit.first, lat = hit.second, lon = hit.third, weatherOn = true))
+                cityInput = hit.first
+            } else {
+                Toast.makeText(ctx, "Couldn't find that place (are you online?)", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     Column(
@@ -535,45 +782,130 @@ private fun SettingsScreen(
         )
         BasicText("Settings", style = ts(p.ink, 34.sp))
         LazyColumn(contentPadding = PaddingValues(bottom = 32.dp)) {
-            item { SectionTitle("Font", p) }
-            items(AppFont.entries) { f ->
+            // Clock
+            item { SectionTitle("Clock style", p) }
+            items(ClockStyle.entries) { s ->
+                OptionRow(s.label, s == cfg.clock, p) { onConfig(cfg.copy(clock = s)) }
+            }
+            item { SectionTitle("Time format", p) }
+            items(HourFormat.entries) { h ->
+                OptionRow(h.label, h == cfg.hours, p) { onConfig(cfg.copy(hours = h)) }
+            }
+            item { SectionTitle("Date format", p) }
+            items(DateStyle.entries) { d ->
+                val pattern = d.pattern
+                val label = if (pattern == null) "Hidden" else now.format(DateTimeFormatter.ofPattern(pattern))
+                OptionRow(label, d == cfg.date, p) { onConfig(cfg.copy(date = d)) }
+            }
+
+            // Weather
+            item { SectionTitle("Weather", p) }
+            item { SwitchRow("Show weather on Home", cfg.weatherOn, p) { onConfig(cfg.copy(weatherOn = it)) } }
+            item {
+                Pill(p, Modifier.padding(vertical = 4.dp)) {
+                    BasicTextField(
+                        value = cityInput,
+                        onValueChange = { cityInput = it },
+                        singleLine = true,
+                        textStyle = ts(p.ink, 16.sp, FontWeight.Normal),
+                        cursorBrush = SolidColor(p.accent),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { setCity() }),
+                        modifier = Modifier.weight(1f),
+                        decorationBox = { inner ->
+                            Box(contentAlignment = Alignment.CenterStart) {
+                                if (cityInput.isEmpty()) BasicText("Your city", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                                inner()
+                            }
+                        },
+                    )
+                    BasicText(
+                        "Set",
+                        style = ts(p.accent, 16.sp, FontWeight.Medium),
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .clickable(role = Role.Button) { setCity() }
+                            .wrapContentHeight(Alignment.CenterVertically)
+                            .padding(start = 12.dp),
+                    )
+                }
+            }
+            item {
+                BasicText(
+                    if (cfg.city.isBlank()) "Type a city and tap Set. Only the city name is sent, to Open-Meteo."
+                    else "Showing weather for ${cfg.city}.",
+                    style = ts(p.muted, 14.sp, FontWeight.Normal),
+                )
+            }
+            item { SwitchRow("Use Fahrenheit", cfg.fahrenheit, p) { onConfig(cfg.copy(fahrenheit = it)) } }
+
+            // Calendar
+            item { SectionTitle("Calendar", p) }
+            item {
+                SwitchRow("Show next event on Home", cfg.calendarOn, p) { on ->
+                    if (on && !has(Manifest.permission.READ_CALENDAR)) calendarPerm.launch(Manifest.permission.READ_CALENDAR)
+                    else onConfig(cfg.copy(calendarOn = on))
+                }
+            }
+
+            // Tap actions
+            item { SectionTitle("Tap actions", p) }
+            items(Slot.entries) { slot ->
+                val name = apps.firstOrNull { it.key == cfg.appFor(slot) }?.label ?: "Default"
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .heightIn(min = 52.dp)
-                        .clickable(role = Role.RadioButton) { onFont(f) },
+                        .clickable(role = Role.Button) { onPickSlot(slot) },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    RadioDot(f == font, p)
-                    Spacer(Modifier.width(16.dp))
-                    BasicText(
-                        f.label,
-                        style = TextStyle(color = p.ink, fontSize = 22.sp, fontWeight = FontWeight.Light, fontFamily = f.family),
-                    )
+                    BasicText(slot.label, style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
+                    BasicText(name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.muted, 16.sp, FontWeight.Normal))
                 }
             }
-            item { SectionTitle("Gestures", p) }
+
+            // Search
+            item { SectionTitle("Search", p) }
+            item { SwitchRow("Apps", cfg.searchApps, p) { onConfig(cfg.copy(searchApps = it)) } }
             item {
-                BasicText(
-                    "On Home: double tap a blank spot to sleep, long-press it to open Settings, swipe down for notifications, swipe up for apps. Sleep and notifications need the Minimal gestures accessibility service.",
-                    style = ts(p.muted, 15.sp, FontWeight.Normal),
-                )
+                SwitchRow("Contacts", cfg.searchContacts, p) { on ->
+                    if (on && !has(Manifest.permission.READ_CONTACTS)) contactsPerm.launch(Manifest.permission.READ_CONTACTS)
+                    else onConfig(cfg.copy(searchContacts = on))
+                }
             }
             item {
+                SwitchRow("Files and documents", cfg.searchFiles, p) { on ->
+                    onConfig(cfg.copy(searchFiles = on))
+                    if (on && !Environment.isExternalStorageManager()) {
+                        Toast.makeText(ctx, "Allow file access, then come back", Toast.LENGTH_LONG).show()
+                        ctx.startActivity(
+                            Intent(
+                                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                Uri.parse("package:" + ctx.packageName),
+                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+                }
+            }
+            item { SwitchRow("Web search", cfg.searchWeb, p) { onConfig(cfg.copy(searchWeb = it)) } }
+            item {
                 BasicText(
-                    "Open accessibility settings",
-                    style = ts(p.accent, 16.sp, FontWeight.Medium),
-                    modifier = Modifier
-                        .heightIn(min = 52.dp)
-                        .clickable(role = Role.Button) {
-                            ctx.startActivity(
-                                Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
-                        }
-                        .wrapContentHeight(Alignment.CenterVertically),
+                    "Search engine",
+                    style = ts(p.muted, 14.sp, FontWeight.Normal),
+                    modifier = Modifier.padding(top = 12.dp),
                 )
             }
+            items(Engine.entries) { e ->
+                OptionRow(e.label, e == cfg.engine, p) { onConfig(cfg.copy(engine = e)) }
+            }
+
+            // Font
+            item { SectionTitle("Font", p) }
+            items(AppFont.entries) { f ->
+                OptionRow(f.label, f == cfg.font, p, family = f.family) { onConfig(cfg.copy(font = f)) }
+            }
+
+            // Favorites
             item { SectionTitle("Favorites", p) }
             if (favorites.isEmpty()) {
                 item { BasicText("No favorites yet. Add some below.", style = ts(p.muted, 15.sp, FontWeight.Normal)) }
@@ -601,12 +933,36 @@ private fun SettingsScreen(
                 )
             }
             if (adding) {
-                items(addable, key = { "add${it.key}" }) { app ->
+                items(addable, key = { "add" + it.key }) { app ->
                     AppRow(app, 20.sp, p.ink, onClick = {
                         onSetFavs(favKeys + app.key)
                         if (favKeys.size + 1 >= MAX_FAVORITES) adding = false
                     })
                 }
+            }
+
+            // Gestures (kept at the bottom)
+            item { SectionTitle("Gestures", p) }
+            item {
+                BasicText(
+                    "On Home: double tap a blank spot to sleep, long-press it to open Settings, swipe down for notifications, swipe up for your apps. Sleep and notifications need the Minimal gestures accessibility service.",
+                    style = ts(p.muted, 15.sp, FontWeight.Normal),
+                )
+            }
+            item {
+                BasicText(
+                    "Open accessibility settings",
+                    style = ts(p.accent, 16.sp, FontWeight.Medium),
+                    modifier = Modifier
+                        .heightIn(min = 52.dp)
+                        .clickable(role = Role.Button) {
+                            ctx.startActivity(
+                                Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
+                        .wrapContentHeight(Alignment.CenterVertically),
+                )
             }
         }
     }
@@ -621,6 +977,49 @@ private fun SectionTitle(text: String, p: Palette) {
         style = ts(p.accent, 13.sp, FontWeight.Medium, 1.sp),
         modifier = Modifier.padding(top = 28.dp, bottom = 4.dp),
     )
+}
+
+@Composable
+private fun OptionRow(label: String, selected: Boolean, p: Palette, family: FontFamily? = null, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .clickable(role = Role.RadioButton, onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioDot(selected, p)
+        Spacer(Modifier.width(16.dp))
+        BasicText(
+            label,
+            style = TextStyle(
+                color = p.ink, fontSize = 22.sp, fontWeight = FontWeight.Light,
+                fontFamily = family ?: LocalFont.current,
+            ),
+        )
+    }
+}
+
+@Composable
+private fun SwitchRow(label: String, checked: Boolean, p: Palette, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onChange),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        BasicText(label, style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
+        Canvas(Modifier.size(width = 44.dp, height = 26.dp)) {
+            val r = size.height / 2f
+            drawRoundRect(if (checked) p.accent else p.pill, cornerRadius = CornerRadius(r, r))
+            drawCircle(
+                if (checked) p.bg else p.muted,
+                radius = r * 0.7f,
+                center = Offset(if (checked) size.width - r else r, r),
+            )
+        }
+    }
 }
 
 @Composable
@@ -679,6 +1078,38 @@ private fun SearchIcon(color: Color) {
     }
 }
 
+@Composable
+private fun WebRow(p: Palette, text: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .clickable(role = Role.Button, onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SearchIcon(p.accent)
+        Spacer(Modifier.width(16.dp))
+        BasicText(text, maxLines = 2, overflow = TextOverflow.Ellipsis, style = ts(p.ink, 18.sp, FontWeight.Normal))
+    }
+}
+
+@Composable
+private fun TextRow(text: String, sub: String?, p: Palette, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(vertical = 6.dp),
+        verticalArrangement = Arrangement.Center,
+    ) {
+        BasicText(text, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.ink, 20.sp))
+        if (sub != null) {
+            BasicText(sub, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.muted, 13.sp, FontWeight.Normal))
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AppRow(
@@ -707,6 +1138,45 @@ private fun AppRow(
         if (marker != null) {
             Spacer(Modifier.width(12.dp))
             Canvas(Modifier.size(8.dp)) { drawCircle(marker) }
+        }
+    }
+}
+
+@Composable
+private fun AppPicker(p: Palette, slot: Slot, apps: List<App>, onPick: (App?) -> Unit, onCancel: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(p.bg)
+            .windowInsetsPadding(WindowInsets.systemBars)
+            .padding(horizontal = 32.dp)
+            .pointerInput(Unit) { detectTapGestures { } },
+    ) {
+        BasicText(
+            "Cancel",
+            style = ts(p.accent, 16.sp, FontWeight.Medium),
+            modifier = Modifier
+                .padding(top = 8.dp)
+                .heightIn(min = 52.dp)
+                .clickable(role = Role.Button, onClick = onCancel)
+                .wrapContentHeight(Alignment.CenterVertically),
+        )
+        BasicText("Open ${slot.label.lowercase()} with", style = ts(p.ink, 28.sp))
+        LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp)) {
+            item {
+                BasicText(
+                    "Default",
+                    style = ts(p.accent, 22.sp, FontWeight.Medium),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .clickable(role = Role.Button) { onPick(null) }
+                        .wrapContentHeight(Alignment.CenterVertically),
+                )
+            }
+            items(apps, key = { it.key }) { app ->
+                AppRow(app, 22.sp, p.ink, onClick = { onPick(app) })
+            }
         }
     }
 }
