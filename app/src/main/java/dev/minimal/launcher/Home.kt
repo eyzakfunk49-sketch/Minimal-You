@@ -151,12 +151,19 @@ internal fun HomeAlign.horizontal(): Alignment.Horizontal = when (this) {
 }
 
 @Composable
-internal fun ClockText(p: Palette, style: ClockStyle, now: LocalDateTime, is24: Boolean, align: Alignment.Horizontal = Alignment.Start) {
+internal fun ClockText(
+    p: Palette,
+    style: ClockStyle,
+    now: LocalDateTime,
+    is24: Boolean,
+    align: Alignment.Horizontal = Alignment.Start,
+    thin: FontFamily? = null,
+) {
     fun f(pattern: String): String = now.format(DateTimeFormatter.ofPattern(pattern))
     val hm = f(if (is24) "H:mm" else "h:mm")
     when (style) {
         ClockStyle.LARGE -> BasicText(hm, style = ts(p.ink, 96.sp, FontWeight.Light, (-4).sp, 104.sp))
-        ClockStyle.THIN -> BasicText(hm, style = ts(p.ink, 104.sp, FontWeight.Thin, (-3).sp, 110.sp))
+        ClockStyle.THIN -> BasicText(hm, style = ts(p.ink, 104.sp, FontWeight.Thin, (-3).sp, 110.sp).let { if (thin != null) it.copy(fontFamily = thin) else it })
         ClockStyle.BOLD -> BasicText(hm, style = ts(p.ink, 96.sp, FontWeight.Bold, (-4).sp, 104.sp))
         // Hours in the text color, minutes in the accent color.
         ClockStyle.TWO_TONE -> BasicText(
@@ -169,8 +176,8 @@ internal fun ClockText(p: Palette, style: ClockStyle, now: LocalDateTime, is24: 
             style = ts(p.ink, 96.sp, FontWeight.Light, (-4).sp, 104.sp),
         )
         ClockStyle.THIN_STACKED -> Column(horizontalAlignment = align) {
-            BasicText(f(if (is24) "HH" else "hh"), style = ts(p.ink, 96.sp, FontWeight.Thin, (-2).sp, 90.sp))
-            BasicText(f("mm"), style = ts(p.accent, 96.sp, FontWeight.Thin, (-2).sp, 90.sp))
+            BasicText(f(if (is24) "HH" else "hh"), style = ts(p.ink, 96.sp, FontWeight.Thin, (-2).sp, 90.sp).let { if (thin != null) it.copy(fontFamily = thin) else it })
+            BasicText(f("mm"), style = ts(p.accent, 96.sp, FontWeight.Thin, (-2).sp, 90.sp).let { if (thin != null) it.copy(fontFamily = thin) else it })
         }
         ClockStyle.COMPACT -> BasicText(hm, style = ts(p.ink, 48.sp, FontWeight.Normal, (-1).sp, 56.sp))
         ClockStyle.STACKED -> Column(horizontalAlignment = align) {
@@ -379,7 +386,11 @@ internal fun Home(
             }
             if (cfg.showClock) {
                 Box(Modifier.softClick(role = Role.Button) { onSlot(Slot.CLOCK) }) {
-                    ClockText(p, cfg.clock, now, is24, cfg.homeAlign.horizontal())
+                    ClockText(
+                        p, cfg.clock, now, is24, cfg.homeAlign.horizontal(),
+                        // Only swapped in for the built-in sans fonts; a serif, mono or custom font keeps its own look.
+                        thin = if (cfg.font == AppFont.SANS || cfg.font == AppFont.CONDENSED) ThinFamily else null,
+                    )
                 }
             }
             if (weather != null || showBatteryLine) {

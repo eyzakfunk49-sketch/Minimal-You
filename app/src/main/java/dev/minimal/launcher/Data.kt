@@ -78,6 +78,12 @@ enum class AppFont(val label: String, val family: FontFamily) {
     CUSTOM("Custom", FontFamily.Default),
 }
 
+/**
+ * Many phones (Pixels included) ship a system font with no real Thin weight, so asking for "thin" looks the
+ * same as light. This is the Roboto Thin that Android keeps under its own name.
+ */
+val ThinFamily: FontFamily = FontFamily(Typeface.create("sans-serif-thin", Typeface.NORMAL))
+
 /** A .ttf/.otf the user picked, copied into the app's own storage so it keeps working. */
 object CustomFont {
     var family: FontFamily? = null
