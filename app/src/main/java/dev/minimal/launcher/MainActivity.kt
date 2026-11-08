@@ -27,6 +27,18 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import kotlin.math.abs
 import android.app.Activity
 import android.appwidget.AppWidgetHost
 import android.appwidget.AppWidgetManager
@@ -99,11 +111,17 @@ private const val MAX_FAVORITES = 6
 class MainActivity : ComponentActivity() {
     // Bumped whenever Home is pressed while we're already open, so overlays can close.
     private var homePress by mutableIntStateOf(0)
+    private var resumes by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { LauncherApp(homePress) }
+        setContent { LauncherApp(homePress, resumes) }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        resumes++
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -209,7 +227,7 @@ private fun ts(
 // ---------- Root ----------
 
 @Composable
-fun LauncherApp(homePress: Int) {
+fun LauncherApp(homePress: Int, resumes: Int) {
     val ctx = LocalContext.current
     val p = palette()
     var apps by remember { mutableStateOf(emptyList<App>()) }
@@ -232,6 +250,20 @@ fun LauncherApp(homePress: Int) {
         apps = withContext(Dispatchers.Default) { loadApps(ctx) }
     }
     LaunchedEffect(homePress) { drawerOpen = false; settingsOpen = false; searchOpen = false; pickSlot = null; widgetsOpen = false }
+    // Hide or show the system status bar.
+    val view = LocalView.current
+    LaunchedEffect(cfg.hideStatusBar, resumes, homePress) {
+        var c: Context? = view.context
+        while (c is android.content.ContextWrapper && c !is Activity) c = c.baseContext
+        val window = (c as? Activity)?.window ?: return@LaunchedEffect
+        val controller = WindowCompat.getInsetsController(window, view)
+        if (cfg.hideStatusBar) {
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.statusBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.statusBars())
+        }
+    }
     BackHandler(enabled = drawerOpen) { drawerOpen = false }
     BackHandler(enabled = widgetsOpen) { widgetsOpen = false }
     BackHandler(enabled = searchOpen) { searchOpen = false }
@@ -423,11 +455,13 @@ private fun Home(
         HourFormat.H12 -> false
         HourFormat.H24 -> true
     }
+    val showStatus = cfg.hideStatusBar && (cfg.showBattery || cfg.showWifi || cfg.showSignal)
+    val status by rememberStatus(showStatus)
 
     Column(
         Modifier
             .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.systemBars)
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
             .padding(horizontal = 32.dp)
             // Blank space: double tap = sleep, long press = settings.
             .pointerInput(gesturesEnabled) {
@@ -462,7 +496,13 @@ private fun Home(
                 }
             },
     ) {
-        Spacer(Modifier.height(64.dp))
+        if (cfg.hideStatusBar) {
+            Spacer(Modifier.height(24.dp))
+            if (showStatus) StatusRow(p, cfg, status) else Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(40.dp))
+        } else {
+            Spacer(Modifier.height(64.dp))
+        }
         Column(Modifier.fillMaxWidth()) {
             val datePattern = cfg.date.pattern
             if (datePattern != null) {
@@ -553,47 +593,37 @@ private fun Drawer(
         map
     }
 
-    // Keep dragging past the top (down) or the bottom (up) of the list to go back Home.
-    val edgeClose = remember(onClose, listState) {
-        object : NestedScrollConnection {
-            var down = 0f
-            var up = 0f
-            var last = 0L
-            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                if (source != NestedScrollSource.UserInput) return Offset.Zero
-                val t = System.currentTimeMillis()
-                if (t - last > 300L || consumed.y != 0f) { down = 0f; up = 0f }
-                last = t
-                if (available.y > 0f) {
-                    up = 0f
-                    down += available.y
-                    if (down > 150f) { down = 0f; onClose() }
-                } else if (available.y < 0f && !listState.canScrollForward) {
-                    down = 0f
-                    up -= available.y
-                    if (up > 200f) { up = 0f; onClose() }
-                }
-                return Offset.Zero
-            }
-        }
-    }
-
     Column(
         Modifier
             .fillMaxSize()
             .background(p.bg)
-            .windowInsetsPadding(WindowInsets.systemBars)
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
             .imePadding()
             .padding(horizontal = 32.dp)
-            // Swipe down on the search area or any blank spot also closes it.
-            .pointerInput(Unit) {
-                var total = 0f
-                detectVerticalDragGestures(
-                    onDragStart = { total = 0f },
-                    onDragEnd = { if (total > 120f) onClose() },
-                    onDragCancel = {},
-                    onVerticalDrag = { _, dy -> total += dy },
-                )
+            // Close the drawer with a clear vertical drag that starts and ends with the list at its
+            // top (drag down) or bottom (drag up). Watches without consuming, so scrolling is unaffected.
+            .pointerInput(listState, letters.size) {
+                val stripPx = 28.dp.toPx()
+                awaitEachGesture {
+                    val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val startedAtTop = !listState.canScrollBackward
+                    val startedAtBottom = !listState.canScrollForward
+                    val inStrip = letters.size > 1 && first.position.x > size.width - stripPx
+                    var dx = 0f
+                    var dy = 0f
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == first.id } ?: break
+                        if (!change.pressed) break
+                        val delta = change.positionChange()
+                        dx += delta.x
+                        dy += delta.y
+                    }
+                    if (!inStrip && abs(dy) > 140f && abs(dy) > 2f * abs(dx)) {
+                        if (dy > 0f && startedAtTop && !listState.canScrollBackward) onClose()
+                        else if (dy < 0f && startedAtBottom && !listState.canScrollForward) onClose()
+                    }
+                }
             },
     ) {
         Spacer(Modifier.height(24.dp))
@@ -620,7 +650,7 @@ private fun Drawer(
         Spacer(Modifier.height(8.dp))
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
-                Modifier.fillMaxSize().nestedScroll(edgeClose),
+                Modifier.fillMaxSize(),
                 state = listState,
                 contentPadding = PaddingValues(end = 28.dp, bottom = 24.dp),
             ) {
@@ -727,7 +757,7 @@ private fun SearchScreen(p: Palette, cfg: Config, apps: List<App>, onClose: () -
         Modifier
             .fillMaxSize()
             .background(p.bg)
-            .windowInsetsPadding(WindowInsets.systemBars)
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
             .imePadding()
             .padding(horizontal = 32.dp)
             .pointerInput(Unit) {
@@ -863,6 +893,10 @@ private fun SettingsScreen(
         if (ok) onConfig(cfg.copy(weatherLocation = true, weatherOn = true))
         else Toast.makeText(ctx, "Location permission was denied", Toast.LENGTH_SHORT).show()
     }
+    val phonePerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) onConfig(cfg.copy(showSignal = true))
+        else Toast.makeText(ctx, "Phone permission was denied, so signal bars can't show", Toast.LENGTH_SHORT).show()
+    }
     val notifGranted = remember(now.minute, cfg.notifDots) {
         NotificationManagerCompat.getEnabledListenerPackages(ctx).contains(ctx.packageName)
     }
@@ -893,7 +927,7 @@ private fun SettingsScreen(
         Modifier
             .fillMaxSize()
             .background(p.bg)
-            .windowInsetsPadding(WindowInsets.systemBars)
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
             .padding(horizontal = 32.dp),
     ) {
         BasicText(
@@ -927,8 +961,9 @@ private fun SettingsScreen(
             item { SectionTitle("Weather", p) }
             item { SwitchRow("Show weather on Home", cfg.weatherOn, p) { onConfig(cfg.copy(weatherOn = it)) } }
             item {
-                Pill(p, Modifier.padding(vertical = 4.dp)) {
+                Pill(p, Modifier.padding(vertical = 4.dp).alpha(if (cfg.weatherLocation) 0.4f else 1f)) {
                     BasicTextField(
+                        enabled = !cfg.weatherLocation,
                         value = cityInput,
                         onValueChange = { cityInput = it },
                         singleLine = true,
@@ -949,13 +984,13 @@ private fun SettingsScreen(
                         style = ts(p.accent, 16.sp, FontWeight.Medium),
                         modifier = Modifier
                             .heightIn(min = 48.dp)
-                            .clickable(role = Role.Button) { setCity() }
+                            .clickable(enabled = !cfg.weatherLocation, role = Role.Button) { setCity() }
                             .wrapContentHeight(Alignment.CenterVertically)
                             .padding(start = 12.dp),
                     )
                 }
             }
-            item {
+            if (!cfg.weatherLocation) item {
                 BasicText(
                     if (cfg.city.isBlank()) "Type a city and tap Set. Only the city name is sent, to Open-Meteo."
                     else "Showing weather for ${cfg.city}.",
@@ -984,6 +1019,26 @@ private fun SettingsScreen(
                 SwitchRow("Show next event on Home", cfg.calendarOn, p) { on ->
                     if (on && !has(Manifest.permission.READ_CALENDAR)) calendarPerm.launch(Manifest.permission.READ_CALENDAR)
                     else onConfig(cfg.copy(calendarOn = on))
+                }
+            }
+
+            // Status bar
+            item { SectionTitle("Status bar", p) }
+            item { SwitchRow("Hide status bar", cfg.hideStatusBar, p) { onConfig(cfg.copy(hideStatusBar = it)) } }
+            if (cfg.hideStatusBar) {
+                item { SwitchRow("Battery on Home", cfg.showBattery, p) { onConfig(cfg.copy(showBattery = it)) } }
+                item { SwitchRow("Wi-Fi on Home", cfg.showWifi, p) { onConfig(cfg.copy(showWifi = it)) } }
+                item {
+                    SwitchRow("Signal strength on Home", cfg.showSignal, p) { on ->
+                        if (on && !has(Manifest.permission.READ_PHONE_STATE)) phonePerm.launch(Manifest.permission.READ_PHONE_STATE)
+                        else onConfig(cfg.copy(showSignal = on))
+                    }
+                }
+                item {
+                    BasicText(
+                        "Signal bars need phone permission to read signal strength. Nothing is sent anywhere. Swipe down from the very top edge to peek at the real status bar.",
+                        style = ts(p.muted, 14.sp, FontWeight.Normal),
+                    )
                 }
             }
 
@@ -1318,7 +1373,7 @@ private fun AppPicker(p: Palette, slot: Slot, apps: List<App>, onPick: (App?) ->
         Modifier
             .fillMaxSize()
             .background(p.bg)
-            .windowInsetsPadding(WindowInsets.systemBars)
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
             .padding(horizontal = 32.dp)
             .pointerInput(Unit) { detectTapGestures { } },
     ) {
@@ -1363,16 +1418,57 @@ private fun writeWidgetIds(ctx: Context, ids: List<Int>) {
 }
 
 @Composable
+private fun StepBtn(symbol: String, description: String, p: Palette, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(48.dp)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) {
+        BasicText(symbol, style = ts(p.accent, 28.sp, FontWeight.Normal))
+    }
+}
+
+@Composable
+private fun SizeRow(label: String, value: String, p: Palette, onLess: () -> Unit, onMore: () -> Unit, lessDesc: String, moreDesc: String) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        BasicText(label, style = ts(p.muted, 15.sp, FontWeight.Normal), modifier = Modifier.weight(1f))
+        StepBtn("\u2212", lessDesc, p, onLess)
+        BasicText(value, style = ts(p.ink, 15.sp, FontWeight.Normal), modifier = Modifier.width(64.dp))
+        StepBtn("+", moreDesc, p, onMore)
+    }
+}
+
+@Composable
 private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
     val ctx = LocalContext.current
     val host = remember { AppWidgetHost(ctx.applicationContext, WIDGET_HOST_ID) }
     val manager = remember { AppWidgetManager.getInstance(ctx) }
     val density = LocalDensity.current
-    val widthDp = LocalConfiguration.current.screenWidthDp - 64
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp - 64
     var ids by remember { mutableStateOf(readWidgetIds(ctx)) }
     var editing by remember { mutableStateOf(false) }
     var choosing by remember { mutableStateOf(false) }
     var pending by remember { mutableStateOf(-1) } // widget id waiting on a bind or configure step
+
+    // Saved size overrides: height in dp, width as a percent of the page.
+    val heights = remember {
+        mutableStateMapOf<Int, Int>().apply {
+            readWidgetIds(ctx).forEach { id ->
+                val v = appPrefs(ctx).getInt("widget_h_$id", -1)
+                if (v > 0) put(id, v)
+            }
+        }
+    }
+    val widths = remember {
+        mutableStateMapOf<Int, Int>().apply {
+            readWidgetIds(ctx).forEach { id ->
+                val v = appPrefs(ctx).getInt("widget_w_$id", -1)
+                if (v > 0) put(id, v)
+            }
+        }
+    }
 
     DisposableEffect(host) {
         try { host.startListening() } catch (_: Exception) { }
@@ -1389,6 +1485,9 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
         try { host.deleteAppWidgetId(id) } catch (_: Exception) { }
         ids = ids - id
         writeWidgetIds(ctx, ids)
+        heights.remove(id)
+        widths.remove(id)
+        appPrefs(ctx).edit().remove("widget_h_$id").remove("widget_w_$id").apply()
     }
 
     val configLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
@@ -1441,7 +1540,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
         Column(
             Modifier
                 .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.systemBars)
+                .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
                 .padding(horizontal = 32.dp)
                 // Swipe left on a blank spot to go back Home.
                 .pointerInput(Unit) {
@@ -1455,15 +1554,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                 },
         ) {
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                BasicText(
-                    "Home",
-                    style = ts(p.accent, 16.sp, FontWeight.Medium),
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 52.dp)
-                        .clickable(role = Role.Button, onClick = onClose)
-                        .wrapContentHeight(Alignment.CenterVertically),
-                )
+                BasicText("Widgets", style = ts(p.ink, 34.sp), modifier = Modifier.weight(1f))
                 BasicText(
                     if (editing) "Done" else "Edit",
                     style = ts(p.accent, 16.sp, FontWeight.Medium),
@@ -1482,7 +1573,6 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                         .wrapContentHeight(Alignment.CenterVertically),
                 )
             }
-            BasicText("Widgets", style = ts(p.ink, 34.sp))
             if (ids.isEmpty()) {
                 BasicText(
                     "No widgets yet. Tap Add to pick one.",
@@ -1496,19 +1586,50 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                     if (info == null) {
                         LaunchedEffect(id) { dropId(id) }
                     } else {
-                        val heightDp = with(density) { info.minHeight.toDp() }.coerceAtLeast(96.dp)
+                        val defaultHeight = with(density) { info.minHeight.toDp() }.value.toInt().coerceAtLeast(96)
+                        val heightDp = heights[id] ?: defaultHeight
+                        val widthPct = widths[id] ?: 100
+                        val widgetWidthDp = (screenWidthDp * widthPct / 100).coerceAtLeast(40)
                         Column {
                             AndroidView(
                                 factory = { c -> host.createView(c, id, info) },
                                 update = { v ->
-                                    v.updateAppWidgetSize(Bundle(), widthDp, heightDp.value.toInt(), widthDp, heightDp.value.toInt())
+                                    v.updateAppWidgetSize(Bundle(), widgetWidthDp, heightDp, widgetWidthDp, heightDp)
                                 },
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(heightDp)
+                                    .fillMaxWidth(widthPct / 100f)
+                                    .height(heightDp.dp)
                                     .clip(RoundedCornerShape(24.dp)),
                             )
                             if (editing) {
+                                SizeRow(
+                                    "Height", "$heightDp", p,
+                                    onLess = {
+                                        val v = (heightDp - 40).coerceAtLeast(64)
+                                        heights[id] = v
+                                        appPrefs(ctx).edit().putInt("widget_h_$id", v).apply()
+                                    },
+                                    onMore = {
+                                        val v = (heightDp + 40).coerceAtMost(640)
+                                        heights[id] = v
+                                        appPrefs(ctx).edit().putInt("widget_h_$id", v).apply()
+                                    },
+                                    lessDesc = "Make widget shorter", moreDesc = "Make widget taller",
+                                )
+                                SizeRow(
+                                    "Width", "$widthPct%", p,
+                                    onLess = {
+                                        val v = (widthPct - 10).coerceAtLeast(40)
+                                        widths[id] = v
+                                        appPrefs(ctx).edit().putInt("widget_w_$id", v).apply()
+                                    },
+                                    onMore = {
+                                        val v = (widthPct + 10).coerceAtMost(100)
+                                        widths[id] = v
+                                        appPrefs(ctx).edit().putInt("widget_w_$id", v).apply()
+                                    },
+                                    lessDesc = "Make widget narrower", moreDesc = "Make widget wider",
+                                )
                                 BasicText(
                                     "Remove",
                                     style = ts(p.accent, 15.sp, FontWeight.Medium),
@@ -1534,7 +1655,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                 Modifier
                     .fillMaxSize()
                     .background(p.bg)
-                    .windowInsetsPadding(WindowInsets.systemBars)
+                    .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
                     .padding(horizontal = 32.dp)
                     .pointerInput(Unit) { detectTapGestures { } },
             ) {
@@ -1565,5 +1686,113 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+// ---------- Home status line (shown when the system status bar is hidden) ----------
+
+@Composable
+private fun rememberStatus(enabled: Boolean): State<SysStatus> {
+    val ctx = LocalContext.current
+    val status = remember { mutableStateOf(SysStatus()) }
+    LaunchedEffect(enabled) {
+        if (enabled) {
+            while (true) {
+                status.value = withContext(Dispatchers.Default) { readStatus(ctx) }
+                delay(10_000L)
+            }
+        }
+    }
+    return status
+}
+
+@Composable
+private fun StatusRow(p: Palette, cfg: Config, status: SysStatus) {
+    Row(
+        Modifier.fillMaxWidth().height(24.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.End),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val cell = status.cell
+        if (cfg.showSignal && cell != null) SignalIcon(cell, p.muted)
+        val wifi = status.wifi
+        if (cfg.showWifi && wifi != null) WifiIcon(wifi, p.muted)
+        if (cfg.showBattery) {
+            val low = status.battery <= 15 && !status.charging
+            val fill = if (status.charging) p.accent else if (low) Color(0xFFE57373) else p.ink
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                BatteryIcon(status.battery, p.muted, fill)
+                BasicText("${status.battery}%", style = ts(p.muted, 13.sp, FontWeight.Normal))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SignalIcon(level: Int, color: Color) {
+    Canvas(Modifier.size(width = 16.dp, height = 12.dp)) {
+        val barW = size.width * 0.18f
+        val gap = (size.width - 4 * barW) / 3f
+        for (i in 0..3) {
+            val h = size.height * (0.35f + 0.65f * i / 3f)
+            drawRoundRect(
+                color = if (i < level) color else color.copy(alpha = 0.3f),
+                topLeft = Offset(i * (barW + gap), size.height - h),
+                size = Size(barW, h),
+                cornerRadius = CornerRadius(barW / 2f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun WifiIcon(level: Int, color: Color) {
+    Canvas(Modifier.size(width = 16.dp, height = 12.dp)) {
+        val cx = size.width / 2f
+        val bottom = size.height
+        val stroke = 1.6.dp.toPx()
+        val lit = (level - 1).coerceIn(0, 3)
+        drawCircle(color, radius = stroke * 0.9f, center = Offset(cx, bottom - stroke))
+        for (k in 1..3) {
+            val r = size.height * (k * 0.3f)
+            drawArc(
+                color = if (k <= lit) color else color.copy(alpha = 0.3f),
+                startAngle = 225f,
+                sweepAngle = 90f,
+                useCenter = false,
+                topLeft = Offset(cx - r, bottom - r),
+                size = Size(2 * r, 2 * r),
+                style = Stroke(stroke, cap = StrokeCap.Round),
+            )
+        }
+    }
+}
+
+@Composable
+private fun BatteryIcon(percent: Int, outline: Color, fill: Color) {
+    Canvas(Modifier.size(width = 22.dp, height = 11.dp)) {
+        val sw = 1.2.dp.toPx()
+        val bodyW = size.width - 2.dp.toPx()
+        drawRoundRect(
+            color = outline,
+            topLeft = Offset(sw / 2f, sw / 2f),
+            size = Size(bodyW - sw, size.height - sw),
+            cornerRadius = CornerRadius(3.dp.toPx()),
+            style = Stroke(sw),
+        )
+        drawRoundRect(
+            color = outline,
+            topLeft = Offset(bodyW, size.height * 0.3f),
+            size = Size(1.6.dp.toPx(), size.height * 0.4f),
+            cornerRadius = CornerRadius(1.dp.toPx()),
+        )
+        val inset = sw + 1.dp.toPx()
+        val fillW = ((bodyW - 2 * inset) * percent.coerceIn(0, 100) / 100f).coerceAtLeast(0f)
+        drawRoundRect(
+            color = fill,
+            topLeft = Offset(inset, inset),
+            size = Size(fillW, size.height - 2 * inset),
+            cornerRadius = CornerRadius(1.5.dp.toPx()),
+        )
     }
 }

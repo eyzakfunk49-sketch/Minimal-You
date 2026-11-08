@@ -10,6 +10,12 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Typeface
 import android.net.Uri
+import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
+import android.os.BatteryManager
+import android.telephony.TelephonyManager
 import android.location.LocationManager
 import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -119,6 +125,10 @@ data class Config(
     val weatherLocation: Boolean = false,
     val widgetsOn: Boolean = false,
     val notifDots: Boolean = true,
+    val hideStatusBar: Boolean = false,
+    val showBattery: Boolean = true,
+    val showWifi: Boolean = true,
+    val showSignal: Boolean = true,
 )
 
 fun appPrefs(ctx: Context): SharedPreferences =
@@ -153,6 +163,10 @@ fun loadConfig(ctx: Context): Config {
         weatherLocation = p.getBoolean("weatherLocation", false),
         widgetsOn = p.getBoolean("widgetsOn", false),
         notifDots = p.getBoolean("notifDots", true),
+        hideStatusBar = p.getBoolean("hideStatusBar", false),
+        showBattery = p.getBoolean("showBattery", true),
+        showWifi = p.getBoolean("showWifi", true),
+        showSignal = p.getBoolean("showSignal", true),
     )
 }
 
@@ -179,6 +193,10 @@ fun saveConfig(ctx: Context, c: Config) {
         .putBoolean("weatherLocation", c.weatherLocation)
         .putBoolean("widgetsOn", c.widgetsOn)
         .putBoolean("notifDots", c.notifDots)
+        .putBoolean("hideStatusBar", c.hideStatusBar)
+        .putBoolean("showBattery", c.showBattery)
+        .putBoolean("showWifi", c.showWifi)
+        .putBoolean("showSignal", c.showSignal)
         .apply()
 }
 
@@ -248,6 +266,43 @@ suspend fun currentLatLon(ctx: Context): Pair<Double, Double>? {
             }
         }
     }
+}
+
+/** wifi / cell are signal levels 0..4, or null when not connected / unknown. */
+data class SysStatus(
+    val battery: Int = 100,
+    val charging: Boolean = false,
+    val wifi: Int? = null,
+    val cell: Int? = null,
+)
+
+fun readStatus(ctx: Context): SysStatus {
+    val bi = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    val level = bi?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+    val scale = bi?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+    val state = bi?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+    val pct = if (level >= 0 && scale > 0) level * 100 / scale else 100
+    val charging = state == BatteryManager.BATTERY_STATUS_CHARGING || state == BatteryManager.BATTERY_STATUS_FULL
+
+    var wifi: Int? = null
+    try {
+        val cm = ctx.getSystemService(ConnectivityManager::class.java)
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+        if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+            val wm = ctx.applicationContext.getSystemService(WifiManager::class.java)
+            @Suppress("DEPRECATION")
+            val rssi = wm.connectionInfo.rssi
+            wifi = wm.calculateSignalLevel(rssi).coerceIn(0, 4)
+        }
+    } catch (e: Exception) { }
+
+    var cell: Int? = null
+    try {
+        val tm = ctx.getSystemService(TelephonyManager::class.java)
+        cell = tm.signalStrength?.level
+    } catch (e: Exception) { }
+
+    return SysStatus(pct, charging, wifi, cell)
 }
 
 fun fetchWeather(lat: Double, lon: Double, fahrenheit: Boolean): Weather? {
