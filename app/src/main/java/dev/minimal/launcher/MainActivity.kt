@@ -20,7 +20,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.snap
@@ -165,6 +164,16 @@ class MainActivity : ComponentActivity() {
 private var launchView: android.view.View? = null
 private var lastTouch = Offset.Zero
 private var launching by mutableStateOf(false)
+/** Finger positions in window coordinates, so a page that moves under the finger doesn't distort the drag. */
+private class RootTracker {
+    var coords: androidx.compose.ui.layout.LayoutCoordinates? = null
+    fun toRoot(p: androidx.compose.ui.geometry.Offset): androidx.compose.ui.geometry.Offset {
+        val c = coords
+        return if (c != null && c.isAttached) c.localToRoot(p) else p
+    }
+}
+
+private var moveEdgeExclusion: (Float) -> Unit = {}
 
 private fun openApp(ctx: Context, app: App) {
     val intent = Intent(Intent.ACTION_MAIN)
@@ -286,7 +295,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     // 0 = Home, 1 = app list fully pulled up. Follows the finger while dragging, then settles.
     val drawerP = remember { Animatable(0f) }
     val pageScope = rememberCoroutineScope()
-    val drawerSpec = sp(0.9f, 650f)
+    val drawerSpec = sp(1f, 650f)
     LaunchedEffect(drawerOpen) { drawerP.animateTo(if (drawerOpen) 1f else 0f, drawerSpec) }
     val widgetsP = remember { Animatable(0f) }
     LaunchedEffect(widgetsOpen) { widgetsP.animateTo(if (widgetsOpen) 1f else 0f, drawerSpec) }
@@ -394,6 +403,25 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     CompositionLocalProvider(LocalFont provides cfg.font.family) {
         val view = LocalView.current
         SideEffect { launchView = view }
+        // Android lets an app claim at most ~200dp of each screen edge from the system back gesture.
+        // Keep that strip where your thumb last touched, so edge swipes reach the launcher instead of "back".
+        val edgePx = with(LocalDensity.current) { 48.dp.roundToPx() }
+        val halfPx = with(LocalDensity.current) { 100.dp.roundToPx() }
+        moveEdgeExclusion = { y ->
+            val w = view.width
+            val h = view.height
+            if (w > 0 && h > 0) {
+                val top = (y.toInt() - halfPx).coerceIn(0, (h - 2 * halfPx).coerceAtLeast(0))
+                view.systemGestureExclusionRects = listOf(
+                    android.graphics.Rect(0, top, edgePx, top + 2 * halfPx),
+                    android.graphics.Rect(w - edgePx, top, w, top + 2 * halfPx),
+                )
+            }
+        }
+        DisposableEffect(view) {
+            view.post { moveEdgeExclusion(view.height * 0.65f) }
+            onDispose { view.systemGestureExclusionRects = emptyList() }
+        }
         LaunchedEffect(resumes) { launching = false }
         LaunchedEffect(launching) { if (launching) { delay(2500); launching = false } }
         val zoom by animateFloatAsState(
@@ -413,6 +441,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     awaitEachGesture {
                         val d = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                         lastTouch = d.position
+                        moveEdgeExclusion(d.position.y)
                     }
                 },
         ) {
@@ -490,9 +519,6 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     )
                 }
             }
-            // Let swipes that start at the very edge reach us instead of triggering the system back gesture.
-            Box(Modifier.align(androidx.compose.ui.BiasAlignment(-1f, 0.3f)).width(36.dp).height(200.dp).systemGestureExclusion())
-            Box(Modifier.align(androidx.compose.ui.BiasAlignment(1f, 0.3f)).width(36.dp).height(200.dp).systemGestureExclusion())
             AnimatedVisibility(
                 visible = searchOpen,
                 enter = screenEnter(),
@@ -646,6 +672,7 @@ private fun Home(
     val curWEnd by rememberUpdatedState(onWidgetsEnd)
     val curSearch by rememberUpdatedState(onOpenSearch)
     val curBuzz by rememberUpdatedState(onBuzz)
+    val rt = remember { RootTracker() }
     val curDrag by rememberUpdatedState(onDrawerDrag)
     val curEnd by rememberUpdatedState(onDrawerEnd)
     val curNotifications by rememberUpdatedState(onNotifications)
@@ -656,6 +683,7 @@ private fun Home(
     Column(
         Modifier
             .fillMaxSize()
+            .onGloballyPositioned { rt.coords = it }
             // Blank space: double tap = sleep, long press = settings.
             .pointerInput(gesturesEnabled) {
                 if (gesturesEnabled) {
@@ -671,7 +699,8 @@ private fun Home(
                     val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     val startTime = first.uptimeMillis
                     val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
-                    tracker.addPosition(first.uptimeMillis, first.position)
+                    val r0 = rt.toRoot(first.position)
+                    tracker.addPosition(first.uptimeMillis, r0)
                     var dx = 0f
                     var dy = 0f
                     var held = false
@@ -682,10 +711,10 @@ private fun Home(
                         val event = awaitPointerEvent(PointerEventPass.Initial)
                         val change = event.changes.firstOrNull { it.id == first.id } ?: break
                         if (!change.pressed) break
-                        tracker.addPosition(change.uptimeMillis, change.position)
-                        val delta = change.positionChange()
-                        dx += delta.x
-                        dy += delta.y
+                        val r = rt.toRoot(change.position)
+                        tracker.addPosition(change.uptimeMillis, r)
+                        dx = r.x - r0.x
+                        dy = r.y - r0.y
                         if (axis != 0 || swallow) {
                             change.consume() // the rest of this gesture belongs to the swipe, not the app under it
                             if (axis == 1) curDrag(if (cfg.drawerRight) -dx / size.width.toFloat() else -dy / size.height.toFloat())
@@ -822,6 +851,7 @@ private fun Drawer(
     onEnd: (Float) -> Unit,
 ) {
     val curDragDrawer by rememberUpdatedState(onDrag)
+    val rt = remember { RootTracker() }
     val curEndDrawer by rememberUpdatedState(onEnd)
     val asApps by remember { derivedStateOf { progress() > 0.55f } }
     var query by remember { mutableStateOf("") }
@@ -850,6 +880,7 @@ private fun Drawer(
         Modifier
             .fillMaxSize()
             .background(p.bg)
+            .onGloballyPositioned { rt.coords = it }
             // Drag the page back the way it came (down, or right when it comes from the right). It follows
             // the finger. Starts only when the list is at its top (bottom mode), so scrolling is unaffected.
             .pointerInput(listState, letters.size, fromRight) {
@@ -860,7 +891,8 @@ private fun Drawer(
                     val startedAtTop = !listState.canScrollBackward
                     val inStrip = letters.size > 1 && first.position.x > size.width - stripPx
                     val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
-                    tracker.addPosition(first.uptimeMillis, first.position)
+                    val r0 = rt.toRoot(first.position)
+                    tracker.addPosition(first.uptimeMillis, r0)
                     var dx = 0f
                     var dy = 0f
                     var pulling = false
@@ -868,10 +900,10 @@ private fun Drawer(
                         val event = awaitPointerEvent(PointerEventPass.Initial)
                         val change = event.changes.firstOrNull { it.id == first.id } ?: break
                         if (!change.pressed) break
-                        tracker.addPosition(change.uptimeMillis, change.position)
-                        val delta = change.positionChange()
-                        dx += delta.x
-                        dy += delta.y
+                        val r = rt.toRoot(change.position)
+                        tracker.addPosition(change.uptimeMillis, r)
+                        dx = r.x - r0.x
+                        dy = r.y - r0.y
                         if (!pulling && !inStrip) {
                             pulling = if (fromRight) dx > slop && dx > 0.8f * abs(dy)
                             else startedAtTop && dy > slop && dy > 0.9f * abs(dx)
@@ -1955,6 +1987,7 @@ private class ScrollPassthroughFrame(ctx: Context) : android.widget.FrameLayout(
 @Composable
 private fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> Unit, onEnd: (Float) -> Unit) {
     val curDrag by rememberUpdatedState(onDrag)
+    val rt = remember { RootTracker() }
     val curEnd by rememberUpdatedState(onEnd)
     val ctx = LocalContext.current
     val host = remember { AppWidgetHost(ctx.applicationContext, WIDGET_HOST_ID) }
@@ -2065,6 +2098,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> Un
         Column(
             Modifier
                 .fillMaxSize()
+                .onGloballyPositioned { rt.coords = it }
                 // Swipe left to push the page back off to the left. Follows the finger; widgets keep their touches
                 // unless the drag is clearly horizontal.
                 .pointerInput(editing) {
@@ -2072,7 +2106,8 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> Un
                     awaitEachGesture {
                         val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                         val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
-                        tracker.addPosition(first.uptimeMillis, first.position)
+                        val r0 = rt.toRoot(first.position)
+                    tracker.addPosition(first.uptimeMillis, r0)
                         var dx = 0f
                         var dy = 0f
                         var pulling = false
@@ -2080,9 +2115,9 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> Un
                             val event = awaitPointerEvent(PointerEventPass.Initial)
                             val change = event.changes.firstOrNull { it.id == first.id } ?: break
                             if (!change.pressed) break
-                            tracker.addPosition(change.uptimeMillis, change.position)
-                            val d = change.positionChange()
-                            dx += d.x; dy += d.y
+                            val r = rt.toRoot(change.position)
+                            tracker.addPosition(change.uptimeMillis, r)
+                            dx = r.x - r0.x; dy = r.y - r0.y
                             if (!pulling && !innerScrolling && dx < -3.dp.toPx() && abs(dx) > 0.8f * abs(dy)) pulling = true
                             if (pulling) {
                                 change.consume()
