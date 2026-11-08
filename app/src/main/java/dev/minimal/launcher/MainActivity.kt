@@ -294,8 +294,9 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     val drawerVisible by remember { derivedStateOf { drawerP.value > 0.001f } }
 
     animationsOn = cfg.animations
+    val buzzView = LocalView.current
     val buzz: () -> Unit = {
-        if (!cfg.noHaptics) view.performHapticFeedback(android.view.HapticFeedbackConstants.GESTURE_START)
+        if (!cfg.noHaptics) buzzView.performHapticFeedback(android.view.HapticFeedbackConstants.GESTURE_START)
     }
     val visibleApps = remember(apps, cfg.hidden) { apps.filter { it.key !in cfg.hidden } }
     var hiddenOpen by remember { mutableStateOf(false) }
