@@ -12,7 +12,8 @@ android {
         applicationId = "dev.minimal.launcher"
         minSdk = 31
         targetSdk = 35
-        versionCode = 1
+        // Goes up with every GitHub Actions run, so Android always sees each build as an update.
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionName = "1.0"
     }
     // A fixed signing key kept with the project, so every build installs over the previous one
