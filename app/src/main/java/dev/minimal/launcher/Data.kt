@@ -117,7 +117,7 @@ fun Config.fontFamily(): FontFamily =
     if (font == AppFont.CUSTOM) CustomFont.family ?: FontFamily.SansSerif else font.family
 
 enum class ClockStyle(val label: String) {
-    LARGE("Large"), BOLD("Bold"), COMPACT("Compact"), STACKED("Stacked"),
+    LARGE("Large"), THIN("Thin"), BOLD("Bold"), TWO_TONE("Two-tone"), COMPACT("Compact"), STACKED("Stacked"), THIN_STACKED("Thin stacked"),
 }
 
 enum class HomeAlign(val label: String) {

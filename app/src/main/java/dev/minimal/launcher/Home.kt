@@ -156,7 +156,20 @@ internal fun ClockText(p: Palette, style: ClockStyle, now: LocalDateTime, is24: 
     val hm = f(if (is24) "H:mm" else "h:mm")
     when (style) {
         ClockStyle.LARGE -> BasicText(hm, style = ts(p.ink, 96.sp, FontWeight.Light, (-4).sp, 104.sp))
+        ClockStyle.THIN -> BasicText(hm, style = ts(p.ink, 104.sp, FontWeight.Thin, (-3).sp, 110.sp))
         ClockStyle.BOLD -> BasicText(hm, style = ts(p.ink, 96.sp, FontWeight.Bold, (-4).sp, 104.sp))
+        // Hours in the text color, minutes in the accent color.
+        ClockStyle.TWO_TONE -> BasicText(
+            androidx.compose.ui.text.buildAnnotatedString {
+                append(hm.substringBefore(':'))
+                withStyle(androidx.compose.ui.text.SpanStyle(color = p.accent)) { append(":" + hm.substringAfter(':')) }
+            },
+            style = ts(p.ink, 96.sp, FontWeight.Light, (-4).sp, 104.sp),
+        )
+        ClockStyle.THIN_STACKED -> Column(horizontalAlignment = align) {
+            BasicText(f(if (is24) "HH" else "hh"), style = ts(p.ink, 96.sp, FontWeight.Thin, (-2).sp, 90.sp))
+            BasicText(f("mm"), style = ts(p.accent, 96.sp, FontWeight.Thin, (-2).sp, 90.sp))
+        }
         ClockStyle.COMPACT -> BasicText(hm, style = ts(p.ink, 48.sp, FontWeight.Normal, (-1).sp, 56.sp))
         ClockStyle.STACKED -> Column(horizontalAlignment = align) {
             BasicText(f(if (is24) "HH" else "hh"), style = ts(p.ink, 88.sp, FontWeight.Light, (-2).sp, 84.sp))
@@ -337,15 +350,30 @@ internal fun Home(
         Spacer(Modifier.height(64.dp))
         Column(Modifier.fillMaxWidth(), horizontalAlignment = cfg.homeAlign.horizontal()) {
             val datePattern = cfg.date.pattern
-            if (datePattern != null) {
-                BasicText(
-                    now.format(DateTimeFormatter.ofPattern(datePattern)),
-                    style = ts(p.muted, 15.sp, FontWeight.Normal),
-                    modifier = Modifier
-                        .heightIn(min = 40.dp)
-                        .softClick(role = Role.Button) { onSlot(Slot.CALENDAR) }
-                        .wrapContentHeight(Alignment.CenterVertically),
-                )
+            if (datePattern != null || event != null) {
+                // "Date | Next event" on one line.
+                Row(Modifier.heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (datePattern != null) {
+                        BasicText(
+                            now.format(DateTimeFormatter.ofPattern(datePattern)),
+                            maxLines = 1,
+                            style = ts(p.muted, 15.sp, FontWeight.Normal),
+                            modifier = Modifier.softClick(role = Role.Button) { onSlot(Slot.CALENDAR) },
+                        )
+                    }
+                    if (datePattern != null && event != null) {
+                        BasicText("  |  ", style = ts(p.muted.copy(alpha = 0.6f), 15.sp, FontWeight.Normal))
+                    }
+                    if (event != null) {
+                        BasicText(
+                            formatEvent(event, is24),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = ts(p.muted, 15.sp, FontWeight.Normal),
+                            modifier = Modifier.weight(1f, fill = false).softClick(role = Role.Button) { onSlot(Slot.CALENDAR) },
+                        )
+                    }
+                }
             }
             if (cfg.showClock) {
                 Box(Modifier.softClick(role = Role.Button) { onSlot(Slot.CLOCK) }) {
@@ -380,18 +408,6 @@ internal fun Home(
                         BasicText("${status.battery}%", style = ts(p.muted, 15.sp, FontWeight.Normal))
                     }
                 }
-            }
-            if (event != null) {
-                BasicText(
-                    formatEvent(event, is24),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = ts(p.muted, 15.sp, FontWeight.Normal),
-                    modifier = Modifier
-                        .heightIn(min = 40.dp)
-                        .softClick(role = Role.Button) { onSlot(Slot.CALENDAR) }
-                        .wrapContentHeight(Alignment.CenterVertically),
-                )
             }
         }
         // With the clock hidden, the favorites can sit in the middle of the screen instead of at the bottom.
