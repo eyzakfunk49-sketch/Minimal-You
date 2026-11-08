@@ -410,10 +410,14 @@ fun LauncherApp(homePress: Int, resumes: Int) {
         // Keep that strip where your thumb last touched, so edge swipes reach the launcher instead of "back".
         val edgePx = with(LocalDensity.current) { 48.dp.roundToPx() }
         val halfPx = with(LocalDensity.current) { 100.dp.roundToPx() }
+        // Only on Home: inside menus the system back gesture has to work, so give the edges back.
+        val exclusionOn = !settingsOpen && !searchOpen && !drawerOpen && !widgetsOpen && pickSlot == null && !hiddenOpen
         moveEdgeExclusion = { y ->
             val w = view.width
             val h = view.height
-            if (w > 0 && h > 0) {
+            if (!exclusionOn) {
+                view.systemGestureExclusionRects = emptyList()
+            } else if (w > 0 && h > 0) {
                 val top = (y.toInt() - halfPx).coerceIn(0, (h - 2 * halfPx).coerceAtLeast(0))
                 view.systemGestureExclusionRects = listOf(
                     android.graphics.Rect(0, top, edgePx, top + 2 * halfPx),
@@ -425,6 +429,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             view.post { moveEdgeExclusion(view.height * 0.65f) }
             onDispose { view.systemGestureExclusionRects = emptyList() }
         }
+        LaunchedEffect(exclusionOn) { moveEdgeExclusion(if (lastTouch.y > 0f) lastTouch.y else view.height * 0.65f) }
         LaunchedEffect(resumes) { launching = false }
         LaunchedEffect(launching) { if (launching) { delay(2500); launching = false } }
         val zoom by animateFloatAsState(
@@ -871,6 +876,9 @@ private fun Drawer(
     LaunchedEffect(active) { if (!active) { query = ""; listState.scrollToItem(0) } }
     val haptic = LocalHapticFeedback.current
     var activeLetter by remember { mutableStateOf<Char?>(null) }
+    // The last letter picked on the strip, kept while the dimming fades back out.
+    var litLetter by remember { mutableStateOf<Char?>(null) }
+    val focus = animateFloatAsState(if (activeLetter != null) 1f else 0f, tw(160), label = "letterFocus")
     val letters = remember(groups) { groups.keys.toList() }
     val headerIndex = remember(groups) {
         val map = mutableMapOf<Char, Int>()
@@ -956,7 +964,13 @@ private fun Drawer(
             ) {
                 groups.forEach { (letter, list) ->
                     stickyHeader(key = "h$letter", contentType = "header") {
-                        Box(Modifier.fillMaxWidth().background(p.bg).padding(top = 12.dp, bottom = 4.dp)) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .background(p.bg)
+                                .padding(top = 12.dp, bottom = 4.dp)
+                                .graphicsLayer { alpha = if (litLetter == letter) 1f else 1f - 0.65f * focus.value },
+                        ) {
                             BasicText(letter.toString(), style = ts(p.accent, 13.sp, FontWeight.Medium, 1.sp))
                         }
                     }
@@ -966,8 +980,9 @@ private fun Drawer(
                             app, 22.sp, p.ink,
                             onClick = { onLaunch(app) },
                             onLongClick = { onTogglePin(app) },
-                            weight = if (isPinned) FontWeight.Medium else FontWeight.Light,
+                            weight = if (activeLetter == letter) FontWeight.SemiBold else if (isPinned) FontWeight.Medium else FontWeight.Light,
                             marker = if (isPinned) p.accent else null,
+                            modifier = Modifier.graphicsLayer { alpha = if (litLetter == letter) 1f else 1f - 0.65f * focus.value },
                         )
                     }
                 }
@@ -989,6 +1004,7 @@ private fun Drawer(
                                         val letter = letters[(frac * letters.size).toInt()]
                                         if (letter != activeLetter) {
                                             activeLetter = letter
+                                            litLetter = letter
                                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                             headerIndex[letter]?.let { listState.requestScrollToItem(it) }
                                         }
@@ -1867,9 +1883,10 @@ private fun AppRow(
     onLongClick: (() -> Unit)? = null,
     weight: FontWeight = FontWeight.Light,
     marker: Color? = null,
+    modifier: Modifier = Modifier,
 ) {
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
             .softCombined(onClick = onClick, onLongClick = onLongClick),
