@@ -20,6 +20,14 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.ui.composed
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -272,6 +280,9 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     val pageScope = rememberCoroutineScope()
     val drawerSpec = remember { spring<Float>(dampingRatio = 0.9f, stiffness = 420f) }
     LaunchedEffect(drawerOpen) { drawerP.animateTo(if (drawerOpen) 1f else 0f, drawerSpec) }
+    val widgetsP = remember { Animatable(0f) }
+    LaunchedEffect(widgetsOpen) { widgetsP.animateTo(if (widgetsOpen) 1f else 0f, drawerSpec) }
+    val widgetsVisible by remember { derivedStateOf { widgetsP.value > 0.001f } }
     val drawerVisible by remember { derivedStateOf { drawerP.value > 0.001f } }
 
     val updateCfg: (Config) -> Unit = { next ->
@@ -388,7 +399,12 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     }
                 },
         ) {
-            Box(Modifier.fillMaxSize().graphicsLayer { val s = 1f - 0.05f * drawerP.value; scaleX = s; scaleY = s; alpha = 1f - 0.5f * drawerP.value }) {
+            Box(Modifier.fillMaxSize().graphicsLayer {
+                val s = 1f - 0.05f * drawerP.value
+                scaleX = s; scaleY = s
+                translationX = widgetsP.value * size.width * 0.22f
+                alpha = 1f - 0.5f * drawerP.value - 0.5f * widgetsP.value
+            }) {
             Home(
                 p, cfg, favorites, weather, event,
                 onOpenDrawer = { drawerOpen = true },
@@ -407,14 +423,27 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                 onLaunch = { openApp(ctx, it) },
                 onSlot = openSlot,
                 onOpenWidgets = { widgetsOpen = true },
+                onWidgetsDrag = { f -> pageScope.launch { widgetsP.snapTo(f.coerceIn(0f, 1f)) } },
+                onWidgetsEnd = { v ->
+                    val open = if (v > 900f) true else if (v < -900f) false else widgetsP.value > 0.5f
+                    widgetsOpen = open
+                    pageScope.launch { widgetsP.animateTo(if (open) 1f else 0f, drawerSpec) }
+                },
             )
             }
-            AnimatedVisibility(
-                visible = widgetsOpen,
-                enter = slideInHorizontally(tween(380, easing = EmphasizedDecel)) { -it / 4 } + fadeIn(tween(300, easing = EmphasizedDecel)),
-                exit = slideOutHorizontally(tween(240, easing = EmphasizedAccel)) { -it / 4 } + fadeOut(tween(200, easing = EmphasizedAccel)),
-            ) {
-                WidgetsScreen(p, onClose = { widgetsOpen = false })
+            if (widgetsVisible) {
+                Box(Modifier.fillMaxSize().graphicsLayer { translationX = -(1f - widgetsP.value) * size.width }) {
+                    WidgetsScreen(
+                        p,
+                        onClose = { widgetsOpen = false },
+                        onDrag = { f -> pageScope.launch { widgetsP.snapTo(f.coerceIn(0f, 1f)) } },
+                        onEnd = { v ->
+                            val open = if (v > 900f) true else if (v < -900f) false else widgetsP.value > 0.5f
+                            widgetsOpen = open
+                            pageScope.launch { widgetsP.animateTo(if (open) 1f else 0f, drawerSpec) }
+                        },
+                    )
+                }
             }
             if (drawerVisible) {
                 // A page pulled up over Home.
@@ -430,15 +459,15 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             }
             AnimatedVisibility(
                 visible = searchOpen,
-                enter = slideInVertically(tween(380, easing = EmphasizedDecel)) { it / 10 } + fadeIn(tween(300, easing = EmphasizedDecel)),
-                exit = slideOutVertically(tween(240, easing = EmphasizedAccel)) { it / 10 } + fadeOut(tween(200, easing = EmphasizedAccel)),
+                enter = screenEnter,
+                exit = screenExit,
             ) {
                 SearchScreen(p, cfg, apps, onClose = { searchOpen = false })
             }
             AnimatedVisibility(
                 visible = settingsOpen,
-                enter = slideInVertically(tween(380, easing = EmphasizedDecel)) { it / 10 } + fadeIn(tween(300, easing = EmphasizedDecel)),
-                exit = slideOutVertically(tween(240, easing = EmphasizedAccel)) { it / 10 } + fadeOut(tween(200, easing = EmphasizedAccel)),
+                enter = screenEnter,
+                exit = screenExit,
             ) {
                 SettingsScreen(
                     p, cfg, updateCfg,
@@ -447,13 +476,17 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     onBack = { settingsOpen = false },
                 )
             }
-            val slot = pickSlot
-            if (slot != null) {
-                AppPicker(
-                    p, slot, apps,
-                    onPick = { app -> updateCfg(cfg.withApp(slot, app?.key ?: "")); pickSlot = null },
-                    onCancel = { pickSlot = null },
-                )
+            var lastSlot by remember { mutableStateOf<Slot?>(null) }
+            if (pickSlot != null) lastSlot = pickSlot
+            AnimatedVisibility(visible = pickSlot != null, enter = pushEnter, exit = pushExit) {
+                val slot = pickSlot ?: lastSlot
+                if (slot != null) {
+                    AppPicker(
+                        p, slot, apps,
+                        onPick = { app -> updateCfg(cfg.withApp(slot, app?.key ?: "")); pickSlot = null },
+                        onCancel = { pickSlot = null },
+                    )
+                }
             }
         }
     }
@@ -499,6 +532,34 @@ private fun ClockText(p: Palette, style: ClockStyle, now: LocalDateTime, is24: B
 private val EmphasizedDecel = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
 private val EmphasizedAccel = CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f)
 
+// Full screens (Settings, Search): a gentle rise with a soft zoom.
+private val screenEnter = slideInVertically(tween(380, easing = EmphasizedDecel)) { it / 14 } +
+    scaleIn(tween(380, easing = EmphasizedDecel), initialScale = 0.95f) + fadeIn(tween(260, easing = EmphasizedDecel))
+private val screenExit = slideOutVertically(tween(240, easing = EmphasizedAccel)) { it / 14 } +
+    scaleOut(tween(240, easing = EmphasizedAccel), targetScale = 0.97f) + fadeOut(tween(180, easing = EmphasizedAccel))
+
+// Sub-menus pushed on top of a screen: slide in from the right.
+private val pushEnter = slideInHorizontally(tween(360, easing = EmphasizedDecel)) { it / 3 } + fadeIn(tween(240, easing = EmphasizedDecel))
+private val pushExit = slideOutHorizontally(tween(260, easing = EmphasizedAccel)) { it / 3 } + fadeOut(tween(180, easing = EmphasizedAccel))
+
+@OptIn(ExperimentalFoundationApi::class)
+private fun Modifier.softCombined(onClick: () -> Unit, onLongClick: (() -> Unit)?): Modifier = composed {
+    val src = remember { MutableInteractionSource() }
+    val pressed by src.collectIsPressedAsState()
+    val a by animateFloatAsState(if (pressed) 0.5f else 1f, tween(if (pressed) 60 else 240), label = "press")
+    this.graphicsLayer { alpha = a }.combinedClickable(
+        interactionSource = src, indication = null, role = Role.Button, onClick = onClick, onLongClick = onLongClick,
+    )
+}
+
+/** A tap target that dims a little while pressed, then eases back. */
+private fun Modifier.softClick(role: Role? = null, onClick: () -> Unit): Modifier = composed {
+    val src = remember { MutableInteractionSource() }
+    val pressed by src.collectIsPressedAsState()
+    val a by animateFloatAsState(if (pressed) 0.5f else 1f, tween(if (pressed) 60 else 240), label = "press")
+    this.graphicsLayer { alpha = a }.clickable(interactionSource = src, indication = null, role = role, onClick = onClick)
+}
+
 @Composable
 private fun Home(
     p: Palette,
@@ -518,6 +579,8 @@ private fun Home(
     onLaunch: (App) -> Unit,
     onSlot: (Slot) -> Unit,
     onOpenWidgets: () -> Unit,
+    onWidgetsDrag: (Float) -> Unit,
+    onWidgetsEnd: (Float) -> Unit,
 ) {
     val ctx = LocalContext.current
     val now by rememberNow()
@@ -527,6 +590,8 @@ private fun Home(
         HourFormat.H24 -> true
     }
     val curDrawer by rememberUpdatedState(onOpenDrawer)
+    val curWDrag by rememberUpdatedState(onWidgetsDrag)
+    val curWEnd by rememberUpdatedState(onWidgetsEnd)
     val curDrag by rememberUpdatedState(onDrawerDrag)
     val curEnd by rememberUpdatedState(onDrawerEnd)
     val curNotifications by rememberUpdatedState(onNotifications)
@@ -558,7 +623,8 @@ private fun Home(
                     var dx = 0f
                     var dy = 0f
                     var held = false
-                    var pulling = false
+                    var axis = 0 // 0 = undecided, 1 = pulling the app list up, 2 = pulling the widgets page in
+                    var swallow = false
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
                         val change = event.changes.firstOrNull { it.id == first.id } ?: break
@@ -567,30 +633,31 @@ private fun Home(
                         val delta = change.positionChange()
                         dx += delta.x
                         dy += delta.y
-                        if (pulling) {
-                            change.consume()
-                            curDrag(-dy / size.height)
+                        if (axis != 0 || swallow) {
+                            change.consume() // the rest of this gesture belongs to the swipe, not the app under it
+                            if (axis == 1) curDrag(-dy / size.height)
+                            if (axis == 2) curWDrag(dx / size.width)
                             continue
                         }
                         // A press-and-hold is a long press (Settings), not a swipe.
                         if (change.uptimeMillis - startTime >= 450L && abs(dx) + abs(dy) < 24f) held = true
                         if (held) continue
                         if (dy < -36f && abs(dy) > 1.5f * abs(dx)) {
-                            pulling = true
+                            axis = 1
                             change.consume()
                             curDrag(-dy / size.height)
-                            continue
-                        }
-                        if (dy > 90f && dy > 1.5f * abs(dx)) {
+                        } else if (cfg.widgetsOn && dx > 28f && dx > 1.2f * abs(dy)) {
+                            axis = 2
+                            change.consume()
+                            curWDrag(dx / size.width)
+                        } else if (dy > 90f && dy > 1.5f * abs(dx)) {
+                            change.consume()
                             curNotifications()
-                            break
-                        }
-                        if (cfg.widgetsOn && dx > 120f && dx > 1.5f * abs(dy)) {
-                            curWidgets()
-                            break
+                            swallow = true
                         }
                     }
-                    if (pulling) curEnd(tracker.calculateVelocity().y)
+                    if (axis == 1) curEnd(tracker.calculateVelocity().y)
+                    if (axis == 2) curWEnd(tracker.calculateVelocity().x)
                 }
             },
     ) {
@@ -603,11 +670,11 @@ private fun Home(
                     style = ts(p.muted, 15.sp, FontWeight.Normal),
                     modifier = Modifier
                         .heightIn(min = 40.dp)
-                        .clickable(role = Role.Button) { onSlot(Slot.CALENDAR) }
+                        .softClick(role = Role.Button) { onSlot(Slot.CALENDAR) }
                         .wrapContentHeight(Alignment.CenterVertically),
                 )
             }
-            Box(Modifier.clickable(role = Role.Button) { onSlot(Slot.CLOCK) }) {
+            Box(Modifier.softClick(role = Role.Button) { onSlot(Slot.CLOCK) }) {
                 ClockText(p, cfg.clock, now, is24)
             }
             if (weather != null || showBatteryLine) {
@@ -623,7 +690,7 @@ private fun Home(
                             style = ts(p.accent, 15.sp, FontWeight.Medium),
                             modifier = Modifier
                                 .heightIn(min = 40.dp)
-                                .clickable(role = Role.Button) { onSlot(Slot.WEATHER) }
+                                .softClick(role = Role.Button) { onSlot(Slot.WEATHER) }
                                 .wrapContentHeight(Alignment.CenterVertically),
                         )
                     }
@@ -647,7 +714,7 @@ private fun Home(
                     style = ts(p.muted, 15.sp, FontWeight.Normal),
                     modifier = Modifier
                         .heightIn(min = 40.dp)
-                        .clickable(role = Role.Button) { onSlot(Slot.CALENDAR) }
+                        .softClick(role = Role.Button) { onSlot(Slot.CALENDAR) }
                         .wrapContentHeight(Alignment.CenterVertically),
                 )
             }
@@ -660,7 +727,7 @@ private fun Home(
             )
         }
         Spacer(Modifier.height(32.dp))
-        Pill(p, Modifier.graphicsLayer { alpha = (1f - drawerProgress() * 4f).coerceIn(0f, 1f) }.clickable(role = Role.Button, onClick = onOpenSearch)) {
+        Pill(p, Modifier.graphicsLayer { alpha = (1f - drawerProgress() * 4f).coerceIn(0f, 1f) }.softClick(role = Role.Button, onClick = onOpenSearch)) {
             SearchIcon(p.accent)
             Spacer(Modifier.width(12.dp))
             BasicText("Search anything", style = ts(p.muted, 16.sp, FontWeight.Normal))
@@ -1042,7 +1109,7 @@ private fun SettingsScreen(
             modifier = Modifier
                 .padding(top = 8.dp)
                 .heightIn(min = 48.dp)
-                .clickable(role = Role.Button, onClick = onBack)
+                .softClick(role = Role.Button, onClick = onBack)
                 .wrapContentHeight(Alignment.CenterVertically),
         )
         BasicText("Settings", style = ts(p.ink, 34.sp))
@@ -1180,7 +1247,7 @@ private fun SettingsScreen(
                     Modifier
                         .fillMaxWidth()
                         .heightIn(min = 52.dp)
-                        .clickable(role = Role.Button) { onPickSlot(slot) },
+                        .softClick(role = Role.Button) { onPickSlot(slot) },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     BasicText(slot.label, style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
@@ -1279,7 +1346,7 @@ private fun SettingsScreen(
                     style = ts(p.accent, 16.sp, FontWeight.Medium),
                     modifier = Modifier
                         .heightIn(min = 52.dp)
-                        .clickable(role = Role.Button) {
+                        .softClick(role = Role.Button) {
                             ctx.startActivity(
                                 Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
                                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -1309,7 +1376,7 @@ private fun OptionRow(label: String, selected: Boolean, p: Palette, family: Font
         Modifier
             .fillMaxWidth()
             .heightIn(min = 52.dp)
-            .clickable(role = Role.RadioButton, onClick = onClick),
+            .softClick(role = Role.RadioButton, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RadioDot(selected, p)
@@ -1334,13 +1401,14 @@ private fun SwitchRow(label: String, checked: Boolean, p: Palette, onChange: (Bo
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BasicText(label, style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
+        val t by animateFloatAsState(if (checked) 1f else 0f, spring(dampingRatio = 0.8f, stiffness = 500f), label = "switch")
         Canvas(Modifier.size(width = 44.dp, height = 26.dp)) {
             val r = size.height / 2f
-            drawRoundRect(if (checked) p.accent else p.pill, cornerRadius = CornerRadius(r, r))
+            drawRoundRect(androidx.compose.ui.graphics.lerp(p.pill, p.accent, t.coerceIn(0f, 1f)), cornerRadius = CornerRadius(r, r))
             drawCircle(
-                if (checked) p.bg else p.muted,
-                radius = r * 0.7f,
-                center = Offset(if (checked) size.width - r else r, r),
+                androidx.compose.ui.graphics.lerp(p.muted, p.bg, t.coerceIn(0f, 1f)),
+                radius = r * (0.62f + 0.1f * t),
+                center = Offset(r + (size.width - 2 * r) * t, r),
             )
         }
     }
@@ -1348,10 +1416,12 @@ private fun SwitchRow(label: String, checked: Boolean, p: Palette, onChange: (Bo
 
 @Composable
 private fun RadioDot(selected: Boolean, p: Palette) {
+    val color by animateColorAsState(if (selected) p.accent else p.muted, tween(200), label = "radioColor")
+    val dot by animateFloatAsState(if (selected) 0.24f else 0f, spring(dampingRatio = 0.7f, stiffness = 600f), label = "radioDot")
     Canvas(Modifier.size(20.dp)) {
         val s = size.minDimension
-        drawCircle(if (selected) p.accent else p.muted, radius = s * 0.45f, style = Stroke(s * 0.1f))
-        if (selected) drawCircle(p.accent, radius = s * 0.24f)
+        drawCircle(color, radius = s * 0.45f, style = Stroke(s * 0.1f))
+        if (dot > 0.001f) drawCircle(p.accent, radius = s * dot)
     }
 }
 
@@ -1408,7 +1478,7 @@ private fun WebRow(p: Palette, text: String, onClick: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
-            .clickable(role = Role.Button, onClick = onClick),
+            .softClick(role = Role.Button, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         SearchIcon(p.accent)
@@ -1423,7 +1493,7 @@ private fun TextRow(text: String, sub: String?, p: Palette, onClick: () -> Unit)
         Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .clickable(role = Role.Button, onClick = onClick)
+            .softClick(role = Role.Button, onClick = onClick)
             .padding(vertical = 6.dp),
         verticalArrangement = Arrangement.Center,
     ) {
@@ -1449,7 +1519,7 @@ private fun AppRow(
         Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onLongClick),
+            .softCombined(onClick = onClick, onLongClick = onLongClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BasicText(
@@ -1482,7 +1552,7 @@ private fun AppPicker(p: Palette, slot: Slot, apps: List<App>, onPick: (App?) ->
             modifier = Modifier
                 .padding(top = 8.dp)
                 .heightIn(min = 52.dp)
-                .clickable(role = Role.Button, onClick = onCancel)
+                .softClick(role = Role.Button, onClick = onCancel)
                 .wrapContentHeight(Alignment.CenterVertically),
         )
         BasicText("Open ${slot.label.lowercase()} with", style = ts(p.ink, 28.sp))
@@ -1494,7 +1564,7 @@ private fun AppPicker(p: Palette, slot: Slot, apps: List<App>, onPick: (App?) ->
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
-                        .clickable(role = Role.Button) { onPick(null) }
+                        .softClick(role = Role.Button) { onPick(null) }
                         .wrapContentHeight(Alignment.CenterVertically),
                 )
             }
@@ -1606,13 +1676,12 @@ private fun WidgetPreview(info: AppWidgetProviderInfo, ctx: Context) {
 
 @Composable
 private fun Chevron(up: Boolean, color: Color) {
-    Canvas(Modifier.size(18.dp)) {
+    val rot by animateFloatAsState(if (up) 180f else 0f, tween(280, easing = EmphasizedDecel), label = "chevron")
+    Canvas(Modifier.size(18.dp).graphicsLayer { rotationZ = rot }) {
         val s = size.minDimension
         val w = s * 0.11f
-        val y1 = if (up) 0.65f else 0.35f
-        val y2 = if (up) 0.3f else 0.7f
-        drawLine(color, Offset(s * 0.15f, s * y1), Offset(s * 0.5f, s * y2), strokeWidth = w, cap = StrokeCap.Round)
-        drawLine(color, Offset(s * 0.5f, s * y2), Offset(s * 0.85f, s * y1), strokeWidth = w, cap = StrokeCap.Round)
+        drawLine(color, Offset(s * 0.15f, s * 0.35f), Offset(s * 0.5f, s * 0.7f), strokeWidth = w, cap = StrokeCap.Round)
+        drawLine(color, Offset(s * 0.5f, s * 0.7f), Offset(s * 0.85f, s * 0.35f), strokeWidth = w, cap = StrokeCap.Round)
     }
 }
 
@@ -1702,7 +1771,9 @@ private class ScrollPassthroughFrame(ctx: Context) : android.widget.FrameLayout(
 }
 
 @Composable
-private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
+private fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> Unit, onEnd: (Float) -> Unit) {
+    val curDrag by rememberUpdatedState(onDrag)
+    val curEnd by rememberUpdatedState(onEnd)
     val ctx = LocalContext.current
     val host = remember { AppWidgetHost(ctx.applicationContext, WIDGET_HOST_ID) }
     val manager = remember { AppWidgetManager.getInstance(ctx) }
@@ -1814,21 +1885,31 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
                 .padding(horizontal = 32.dp)
-                // Swipe left to go back Home. Observes without consuming, so widgets keep their touches.
+                // Swipe left to push the page back off to the left. Follows the finger; widgets keep their touches
+                // unless the drag is clearly horizontal.
                 .pointerInput(editing) {
                     if (editing) return@pointerInput
                     awaitEachGesture {
                         val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
+                        tracker.addPosition(first.uptimeMillis, first.position)
                         var dx = 0f
                         var dy = 0f
+                        var pulling = false
                         while (true) {
                             val event = awaitPointerEvent(PointerEventPass.Initial)
                             val change = event.changes.firstOrNull { it.id == first.id } ?: break
                             if (!change.pressed) break
+                            tracker.addPosition(change.uptimeMillis, change.position)
                             val d = change.positionChange()
                             dx += d.x; dy += d.y
+                            if (!pulling && !innerScrolling && dx < -36f && abs(dx) > 2f * abs(dy)) pulling = true
+                            if (pulling) {
+                                change.consume()
+                                curDrag(1f + dx / size.width)
+                            }
                         }
-                        if (dx < -160f && abs(dx) > 2.5f * abs(dy)) onClose()
+                        if (pulling) curEnd(tracker.calculateVelocity().x)
                     }
                 },
         ) {
@@ -1840,7 +1921,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                         style = ts(p.accent, 16.sp, FontWeight.Medium),
                         modifier = Modifier
                             .heightIn(min = 52.dp)
-                            .clickable(role = Role.Button) { editing = !editing }
+                            .softClick(role = Role.Button) { editing = !editing }
                             .wrapContentHeight(Alignment.CenterVertically)
                             .padding(horizontal = 16.dp),
                     )
@@ -1850,7 +1931,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                     style = ts(p.accent, 16.sp, FontWeight.Medium),
                     modifier = Modifier
                         .heightIn(min = 52.dp)
-                        .clickable(role = Role.Button) { choosing = true }
+                        .softClick(role = Role.Button) { choosing = true }
                         .wrapContentHeight(Alignment.CenterVertically),
                 )
             }
@@ -1945,7 +2026,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                                     style = ts(p.accent, 15.sp, FontWeight.Medium),
                                     modifier = Modifier
                                         .heightIn(min = 48.dp)
-                                        .clickable(role = Role.Button) { dropId(id) }
+                                        .softClick(role = Role.Button) { dropId(id) }
                                         .wrapContentHeight(Alignment.CenterVertically),
                                 )
                             }
@@ -1956,7 +2037,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
             }
         }
 
-        if (choosing) {
+        AnimatedVisibility(visible = choosing, enter = pushEnter, exit = pushExit) {
             val pm = ctx.packageManager
             val dpi = ctx.resources.displayMetrics.density
             // One entry per app; apps with several widgets expand to show them.
@@ -2000,7 +2081,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                     modifier = Modifier
                         .padding(top = 8.dp)
                         .heightIn(min = 52.dp)
-                        .clickable(role = Role.Button) { choosing = false }
+                        .softClick(role = Role.Button) { choosing = false }
                         .wrapContentHeight(Alignment.CenterVertically),
                 )
                 BasicText("Add a widget", style = ts(p.ink, 28.sp))
@@ -2024,7 +2105,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                                 Modifier
                                     .fillMaxWidth()
                                     .heightIn(min = 56.dp)
-                                    .clickable(role = Role.Button) { expanded = if (expanded == pkg) null else pkg }
+                                    .softClick(role = Role.Button) { expanded = if (expanded == pkg) null else pkg }
                                     .padding(vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
@@ -2037,7 +2118,12 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                                 }
                                 Chevron(open, p.accent)
                             }
-                            if (open) {
+                            AnimatedVisibility(
+                                visible = open,
+                                enter = expandVertically(tween(320, easing = EmphasizedDecel)) + fadeIn(tween(240)),
+                                exit = shrinkVertically(tween(240, easing = EmphasizedAccel)) + fadeOut(tween(120)),
+                            ) {
+                              Column {
                                 list.forEach { info ->
                                     Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(start = 8.dp)) {
                                         Box(Modifier.width(2.dp).fillMaxHeight().background(p.accent.copy(alpha = 0.5f)))
@@ -2045,7 +2131,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                                             Modifier
                                                 .fillMaxWidth()
                                                 .heightIn(min = 52.dp)
-                                                .clickable(role = Role.Button) { pick(info) }
+                                                .softClick(role = Role.Button) { pick(info) }
                                                 .padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
                                         ) {
                                             BasicText(
@@ -2059,6 +2145,7 @@ private fun WidgetsScreen(p: Palette, onClose: () -> Unit) {
                                         }
                                     }
                                 }
+                              }
                             }
                         }
                     }
