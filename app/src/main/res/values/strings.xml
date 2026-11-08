@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gesture_service_description">Lets Minimal lock the screen on double tap and open notifications on swipe down. It does not read your screen.</string>
+</resources>
