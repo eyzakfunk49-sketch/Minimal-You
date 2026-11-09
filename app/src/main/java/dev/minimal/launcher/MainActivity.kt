@@ -420,7 +420,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     val visibleApps = remember(apps, cfg.hidden) { apps.filter { it.key !in cfg.hidden } }
     var hiddenOpen by remember { mutableStateOf(false) }
 
-    val recentList = remember(visibleApps, drawerOpen) { recentApps(ctx, visibleApps, 4) }
+    val recentList = remember(visibleApps, drawerOpen) { recentApps(ctx, visibleApps, 3) }
     val updateCfg: (Config) -> Unit = { next ->
         cfg = next
         saveConfig(ctx, next)
