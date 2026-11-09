@@ -4,5 +4,7 @@
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowActionBar">false</item>
         <item name="android:windowShowWallpaper">false</item>
+        <!-- Needed so the system wallpaper can show through when "Wallpaper background" is on. -->
+        <item name="android:windowIsTranslucent">true</item>
     </style>
 </resources>
