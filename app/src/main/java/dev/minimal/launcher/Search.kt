@@ -299,7 +299,21 @@ internal fun SearchScreen(
                         }
                     }
                     items(history, key = { "hist$it" }) { h ->
-                        WebRow(p, h) { query = h }
+                        WebRow(p, h) {
+                            // Same as typing it and pressing enter: open the top app, otherwise search the web.
+                            val hq = h.trim()
+                            val top = if (cfg.searchApps && hq.isNotEmpty()) rankApps(ctx, apps, hq, 1).firstOrNull() else null
+                            if (cfg.searchHistory) { addSearchHistory(ctx, hq); history = readSearchHistory(ctx) }
+                            if (top != null) {
+                                openApp(ctx, top)
+                                onClose()
+                            } else if (hq.isNotEmpty() && cfg.searchWeb) {
+                                openUrl(ctx, cfg.engine.base + URLEncoder.encode(hq, "UTF-8"))
+                                onClose()
+                            } else {
+                                query = h
+                            }
+                        }
                     }
                 }
             } else {
