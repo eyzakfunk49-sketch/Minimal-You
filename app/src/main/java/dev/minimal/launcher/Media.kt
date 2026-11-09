@@ -299,6 +299,7 @@ internal fun MediaPlayerCard(p: Palette, ui: MediaUi, modifier: Modifier = Modif
     var swipeX by remember { mutableStateOf(0f) }
     var width by remember { mutableStateOf(1f) }
     val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
 
     Column(
         modifier
@@ -341,6 +342,24 @@ internal fun MediaPlayerCard(p: Palette, ui: MediaUi, modifier: Modifier = Modif
             .graphicsLayer {
                 translationX = swipeX
                 alpha = 1f - (kotlin.math.abs(swipeX) / width).coerceIn(0f, 1f) * 0.85f
+            }
+            .clip(RoundedCornerShape(32.dp))
+            .clickable {
+                // Open the app that owns the session: its own "now playing" screen if it gave one, else its launcher activity.
+                val c = ui.controller ?: return@clickable
+                try {
+                    val pi = c.sessionActivity
+                    if (pi != null) pi.send()
+                    else ctx.packageManager.getLaunchIntentForPackage(c.packageName)
+                        ?.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        ?.let { ctx.startActivity(it) }
+                } catch (_: Exception) {
+                    try {
+                        ctx.packageManager.getLaunchIntentForPackage(c.packageName)
+                            ?.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            ?.let { ctx.startActivity(it) }
+                    } catch (_: Exception) {}
+                }
             }
             .background(p.pill, RoundedCornerShape(32.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
