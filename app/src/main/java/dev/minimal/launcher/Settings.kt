@@ -725,7 +725,7 @@ internal fun SettingsScreen(
                             }
                             settingsBlock {
                                 SettingsGroup(p, "Home background") {
-                                    SwitchRow("Use a picture behind Home", cfg.wallpaperBg, p) { on ->
+                                    SwitchRow("Set a custom wallpaper", cfg.wallpaperBg, p) { on ->
                                         onConfig(cfg.copy(wallpaperBg = on))
                                         if (on && !homeBgFile(ctx).exists()) bgPicker.launch(arrayOf("image/*"))
                                     }
@@ -743,13 +743,13 @@ internal fun SettingsScreen(
                                             } else if (saveSystemWallpaper(ctx)) {
                                                 onConfig(cfg.copy(bgStamp = System.currentTimeMillis()))
                                             } else {
-                                                Toast.makeText(ctx, "Couldn't read your wallpaper. Choose a picture instead.", Toast.LENGTH_LONG).show()
+                                                Toast.makeText(ctx, "Android won't let apps read the current wallpaper on this phone. Use Choose a picture instead.", Toast.LENGTH_LONG).show()
                                             }
                                         }
                                         SwitchRow("Blur the picture", cfg.wallpaperBlur, p) { onConfig(cfg.copy(wallpaperBlur = it)) }
                                     }
                                 }
-                                Caption(p, "Puts a picture behind the Home screen, under a soft tint so the text stays easy to read. The app list, search and Settings keep their solid background.")
+                                Caption(p, "Shows your own picture behind the Home screen, under a soft tint so the text stays easy to read. The app list, search and Settings keep their solid background.")
                             }
                             settingsBlock {
                                 SettingsGroup(p, "Icons") {

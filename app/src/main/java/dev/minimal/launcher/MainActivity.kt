@@ -466,6 +466,8 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     var tutorialOpen by remember { mutableStateOf(fresh && !appPrefs(ctx).getBoolean("tutorialDone", false)) }
     val finishTutorial = { tutorialOpen = false; appPrefs(ctx).edit().putBoolean("tutorialDone", true).apply() }
     SideEffect { appLockOn = cfg.appLock; lockedKeys = cfg.locked }
+    // Swiping Home (or pressing it) closes these too, not only the main pages.
+    LaunchedEffect(homePress) { openFolder = null; folderEdit = null; timerOpen = false; lockPickerOpen = false; renameApp = null; hiddenOpen = false }
     BackHandler(enabled = pickSlot != null) { pickSlot = null }
     BackHandler(enabled = openFolder != null) { openFolder = null }
     BackHandler(enabled = timerOpen) { timerOpen = false }

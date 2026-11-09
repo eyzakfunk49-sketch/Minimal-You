@@ -787,49 +787,31 @@ internal fun FolderEditor(
             )
         }
         BasicText(if (initialName == null) "New folder" else "Edit folder", style = ts(p.ink, 28.sp))
-        Spacer(Modifier.height(12.dp))
-        Pill(p) {
-            BasicTextField(
-                value = name,
-                onValueChange = { name = it },
-                singleLine = true,
-                textStyle = ts(p.ink, 18.sp, FontWeight.Normal),
-                cursorBrush = SolidColor(p.accent),
-                modifier = Modifier.fillMaxWidth(),
-                decorationBox = { inner ->
-                    Box(contentAlignment = Alignment.CenterStart) {
-                        if (name.isEmpty()) BasicText("Folder name", style = ts(p.muted, 18.sp, FontWeight.Normal))
-                        inner()
-                    }
-                },
-            )
-        }
-        Spacer(Modifier.height(10.dp))
-        Pill(p) {
-            SearchIcon(p.accent)
-            Spacer(Modifier.width(12.dp))
-            BasicTextField(
-                value = query,
-                onValueChange = { query = it },
-                singleLine = true,
-                textStyle = ts(p.ink, 16.sp, FontWeight.Normal),
-                cursorBrush = SolidColor(p.accent),
-                modifier = Modifier.weight(1f),
-                decorationBox = { inner ->
-                    Box(contentAlignment = Alignment.CenterStart) {
-                        if (query.isEmpty()) BasicText("Search apps to add", style = ts(p.muted, 16.sp, FontWeight.Normal))
-                        inner()
-                    }
-                },
-            )
-        }
+        Spacer(Modifier.height(20.dp))
+        // The name is a plain underlined field, so it can't be mistaken for the search bar at the bottom.
+        BasicText("NAME", style = ts(p.muted, 12.sp, FontWeight.Medium, 1.sp))
+        BasicTextField(
+            value = name,
+            onValueChange = { name = it },
+            singleLine = true,
+            textStyle = ts(p.ink, 30.sp, FontWeight.Light),
+            cursorBrush = SolidColor(p.accent),
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            decorationBox = { inner ->
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (name.isEmpty()) BasicText("Work, Social, Games...", style = ts(p.muted.copy(alpha = 0.6f), 30.sp, FontWeight.Light))
+                    inner()
+                }
+            },
+        )
+        Box(Modifier.fillMaxWidth().padding(top = 6.dp).height(2.dp).background(p.accent.copy(alpha = 0.5f), RoundedCornerShape(1.dp)))
+        Spacer(Modifier.height(20.dp))
         BasicText(
-            if (chosen.isEmpty()) "Pick at least one app" else "${chosen.size} selected",
-            style = ts(p.muted, 14.sp, FontWeight.Normal),
-            modifier = Modifier.padding(top = 10.dp),
+            "APPS  ·  " + if (chosen.isEmpty()) "pick at least one" else "${chosen.size} selected",
+            style = ts(p.muted, 12.sp, FontWeight.Medium, 1.sp),
         )
         val visible = remember(apps, query) { if (query.isBlank()) apps else apps.filter { it.label.contains(query.trim(), ignoreCase = true) } }
-        LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 32.dp), modifier = Modifier.weight(1f)) {
+        LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 12.dp), modifier = Modifier.weight(1f)) {
             items(visible, key = { it.key }) { app ->
                 SwitchRow(app.label, app.key in chosen, p) { if (app.key in chosen) chosen.remove(app.key) else chosen.add(app.key) }
             }
@@ -842,6 +824,25 @@ internal fun FolderEditor(
                 }
             }
         }
+        Pill(p) {
+            SearchIcon(p.accent)
+            Spacer(Modifier.width(12.dp))
+            BasicTextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                textStyle = ts(p.ink, 16.sp, FontWeight.Normal),
+                cursorBrush = SolidColor(p.accent),
+                modifier = Modifier.weight(1f),
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) BasicText("Search apps", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                        inner()
+                    }
+                },
+            )
+        }
+        Spacer(Modifier.height(16.dp))
     }
 }
 

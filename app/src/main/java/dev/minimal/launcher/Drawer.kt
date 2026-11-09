@@ -60,6 +60,10 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalView
@@ -273,7 +277,7 @@ internal fun Drawer(
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
-                Modifier.fillMaxSize(),
+                Modifier.fillMaxSize().fadeEdges(),
                 state = listState,
                 contentPadding = PaddingValues(end = 28.dp, bottom = 8.dp),
             ) {
@@ -379,3 +383,23 @@ internal fun Drawer(
         Spacer(Modifier.height(24.dp))
     }
 }
+
+
+/** Softly fades the top and bottom edge of a scrolling list instead of cutting it off. */
+private fun Modifier.fadeEdges(length: androidx.compose.ui.unit.Dp = 28.dp): Modifier = this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val len = length.toPx().coerceAtMost(size.height / 3f)
+        drawRect(
+            Brush.verticalGradient(listOf(Color.Transparent, Color.Black), startY = 0f, endY = len),
+            size = Size(size.width, len),
+            blendMode = BlendMode.DstIn,
+        )
+        drawRect(
+            Brush.verticalGradient(listOf(Color.Black, Color.Transparent), startY = size.height - len, endY = size.height),
+            topLeft = Offset(0f, size.height - len),
+            size = Size(size.width, len),
+            blendMode = BlendMode.DstIn,
+        )
+    }

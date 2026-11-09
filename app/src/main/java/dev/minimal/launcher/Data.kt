@@ -567,15 +567,27 @@ fun homeBgFile(ctx: Context) = java.io.File(ctx.filesDir, "home_bg.jpg")
 fun saveSystemWallpaper(ctx: Context): Boolean {
     if (!Environment.isExternalStorageManager()) return false
     return try {
-        val d = android.app.WallpaperManager.getInstance(ctx).drawable ?: return false
-        val w = d.intrinsicWidth.coerceAtLeast(1)
-        val h = d.intrinsicHeight.coerceAtLeast(1)
-        val scale = minOf(1f, 2200f / h)
-        val bmp = android.graphics.Bitmap.createBitmap((w * scale).toInt().coerceAtLeast(1), (h * scale).toInt().coerceAtLeast(1), android.graphics.Bitmap.Config.ARGB_8888)
-        d.setBounds(0, 0, bmp.width, bmp.height)
-        d.draw(android.graphics.Canvas(bmp))
+        val wm = android.app.WallpaperManager.getInstance(ctx)
+        // Ask for the actual picture first. Without the right access Android hands back its default wallpaper
+        // instead, so a picture that comes from the file is the only one we trust.
+        var bmp: android.graphics.Bitmap? = try {
+            wm.getWallpaperFile(android.app.WallpaperManager.FLAG_SYSTEM)?.use { pfd ->
+                android.graphics.BitmapFactory.decodeFileDescriptor(pfd.fileDescriptor)
+            }
+        } catch (_: Exception) { null }
+        if (bmp == null) {
+            val d = wm.drawable ?: return false
+            val w = d.intrinsicWidth.coerceAtLeast(1)
+            val h = d.intrinsicHeight.coerceAtLeast(1)
+            val scale = minOf(1f, 2200f / h)
+            val b = android.graphics.Bitmap.createBitmap((w * scale).toInt().coerceAtLeast(1), (h * scale).toInt().coerceAtLeast(1), android.graphics.Bitmap.Config.ARGB_8888)
+            d.setBounds(0, 0, b.width, b.height)
+            d.draw(android.graphics.Canvas(b))
+            bmp = b
+        }
+        val out = bmp ?: return false
         val tmp = java.io.File(ctx.filesDir, "home_bg.tmp")
-        tmp.outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it) }
+        tmp.outputStream().use { out.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it) }
         val dest = homeBgFile(ctx)
         dest.delete()
         tmp.renameTo(dest)
