@@ -53,6 +53,8 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -172,7 +174,7 @@ internal fun AppMenu(
                 .padding(horizontal = 24.dp, vertical = 12.dp),
         ) {
             BasicText(
-                app.label,
+                if (LocalLowercase.current) app.label.lowercase() else app.label,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = ts(p.muted, 14.sp, FontWeight.Medium, 0.5.sp),
@@ -437,6 +439,7 @@ internal fun AppRow(
     var textCoords by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
     // Where the middle of the letters really is inside the text box (it differs per font), so the dot lines up with them.
     var dotShift by remember { mutableStateOf(0f) }
+    val lower = LocalLowercase.current
     val sizePx = with(LocalDensity.current) { size.toPx() }
     val click = {
         // Remember where this name is, so the opening app can grow out of it.
@@ -451,7 +454,7 @@ internal fun AppRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BasicText(
-            app.label,
+            if (lower) app.label.lowercase() else app.label,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = ts(color, size, weight),
@@ -462,8 +465,18 @@ internal fun AppRow(
             modifier = Modifier.weight(1f, fill = false).onGloballyPositioned { textCoords = it },
         )
         if (marker != null) {
-            Spacer(Modifier.width(12.dp))
-            Canvas(Modifier.size(8.dp).offset { IntOffset(0, dotShift.roundToInt()) }) { drawCircle(marker) }
+            // The dot takes no room in the row: it hangs just after the name, so the name itself stays exactly
+            // where it would be without a dot (important when the list is centered).
+            Canvas(
+                Modifier
+                    .layout { measurable, constraints ->
+                        val placeable = measurable.measure(constraints)
+                        val gap = 12.dp.roundToPx()
+                        layout(0, placeable.height) { placeable.place(gap, 0) }
+                    }
+                    .size(8.dp)
+                    .offset { IntOffset(0, dotShift.roundToInt()) },
+            ) { drawCircle(marker) }
         }
     }
 }

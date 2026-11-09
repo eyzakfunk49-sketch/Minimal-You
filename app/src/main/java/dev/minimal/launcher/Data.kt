@@ -179,6 +179,8 @@ data class Config(
     val showBattery: Boolean = true,
     val showClock: Boolean = true,
     val homeAlign: HomeAlign = HomeAlign.LEFT,
+    val mediaPlayer: Boolean = true,
+    val lowercaseApps: Boolean = false,
     val pitchBlack: Boolean = false,
     val customFontName: String = "",
     val customFontStamp: Long = 0L,
@@ -227,6 +229,8 @@ fun loadConfig(ctx: Context): Config {
         showBattery = p.getBoolean("showBattery", true),
         showClock = p.getBoolean("showClock", true),
         homeAlign = p.readEnum("homeAlign", HomeAlign.LEFT),
+        mediaPlayer = p.getBoolean("mediaPlayer", true),
+        lowercaseApps = p.getBoolean("lowercaseApps", false),
         pitchBlack = p.getBoolean("pitchBlack", false),
         customFontName = p.getString("customFontName", "") ?: "",
         customFontStamp = p.getLong("customFontStamp", 0L),
@@ -266,6 +270,8 @@ fun saveConfig(ctx: Context, c: Config) {
         .putBoolean("showBattery", c.showBattery)
         .putBoolean("showClock", c.showClock)
         .putString("homeAlign", c.homeAlign.name)
+        .putBoolean("mediaPlayer", c.mediaPlayer)
+        .putBoolean("lowercaseApps", c.lowercaseApps)
         .putBoolean("pitchBlack", c.pitchBlack)
         .putString("customFontName", c.customFontName)
         .putLong("customFontStamp", c.customFontStamp)

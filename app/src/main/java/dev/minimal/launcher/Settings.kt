@@ -53,6 +53,8 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -384,6 +386,25 @@ internal fun SettingsScreen(
 
                         SettingsPage.HOME -> {
                             settingsBlock {
+                                SettingsGroup(p, "Media player") {
+                                    SwitchRow("Show media player", cfg.mediaPlayer, p) { on ->
+                                        onConfig(cfg.copy(mediaPlayer = on))
+                                        if (on && !notifGranted) {
+                                            ctx.startActivity(
+                                                Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                            )
+                                        }
+                                    }
+                                }
+                                Caption(
+                                    p,
+                                    if (!cfg.mediaPlayer) "A small player with play, pause, skip and a seek bar appears on Home while something is playing."
+                                    else if (notifGranted) "Shows on Home while something is playing. It only reads the song name, artist and controls, never notification text."
+                                    else "Needs notification access to see what's playing. Turn on MinimalYou in the list that opens.",
+                                )
+                            }
+                            settingsBlock {
                                 SettingsGroup(p, "Alignment") {
                                     HomeAlign.entries.forEach { a -> OptionRow(a.label, a == cfg.homeAlign, p) { onConfig(cfg.copy(homeAlign = a)) } }
                                 }
@@ -609,6 +630,11 @@ internal fun SettingsScreen(
                         }
 
                         SettingsPage.LOOK -> {
+                            settingsBlock {
+                                SettingsGroup(p, "App names") {
+                                    SwitchRow("Show in lowercase", cfg.lowercaseApps, p) { onConfig(cfg.copy(lowercaseApps = it)) }
+                                }
+                            }
                             settingsBlock {
                                 SettingsGroup(p, "Background") {
                                     SwitchRow("Pitch black", cfg.pitchBlack, p) { onConfig(cfg.copy(pitchBlack = it)) }

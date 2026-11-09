@@ -53,6 +53,8 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -294,6 +296,9 @@ internal fun palette(pitchBlack: Boolean = false): Palette {
 
 internal val LocalFont = compositionLocalOf<FontFamily> { FontFamily.SansSerif }
 
+/** True when app names should be shown in lower case. */
+internal val LocalLowercase = compositionLocalOf { false }
+
 @Composable
 internal fun ts(
     color: Color,
@@ -315,6 +320,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     var favKeys by remember { mutableStateOf(readFavs(ctx)) } // null = use defaults
     var cfg by remember { mutableStateOf(loadConfig(ctx)) }
     val p = palette(cfg.pitchBlack)
+    val media = rememberMedia(cfg.mediaPlayer, resumes)
     var weather by remember { mutableStateOf<Weather?>(null) }
     var event by remember { mutableStateOf<Event?>(null) }
     var drawerOpen by remember { mutableStateOf(false) }
@@ -448,7 +454,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
         else Toast.makeText(ctx, "Pick a ${slot.label.lowercase()} app in Settings", Toast.LENGTH_SHORT).show()
     }
 
-    CompositionLocalProvider(LocalFont provides cfg.fontFamily()) {
+    CompositionLocalProvider(LocalFont provides cfg.fontFamily(), LocalLowercase provides cfg.lowercaseApps) {
         val view = LocalView.current
         SideEffect { launchView = view }
         // Android lets an app claim at most ~200dp of each screen edge from the system back gesture.
@@ -534,6 +540,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     pageScope.launch { searchP.animateTo(if (open) 1f else 0f, drawerSpec) }
                 },
                 onAppMenu = { menuApp = it },
+                media = media,
                 onSettings = {
                     buzzWith(android.view.HapticFeedbackConstants.LONG_PRESS)
                     settingsOpen = true

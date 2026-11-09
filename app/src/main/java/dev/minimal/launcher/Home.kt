@@ -53,6 +53,8 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -242,6 +244,7 @@ internal fun Home(
     searchProgress: () -> Float,
     onPillPos: (Float) -> Unit,
     onAppMenu: (App) -> Unit,
+    media: MediaUi,
     onSettings: () -> Unit,
     onSleep: () -> Unit,
     onNotifications: () -> Unit,
@@ -267,6 +270,7 @@ internal fun Home(
     val curSEnd by rememberUpdatedState(onSearchEnd)
     val curBuzz by rememberUpdatedState(onBuzz)
     val rt = remember { RootTracker() }
+    var playerBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     val curDrag by rememberUpdatedState(onDrawerDrag)
     val curEnd by rememberUpdatedState(onDrawerEnd)
     val curNotifications by rememberUpdatedState(onNotifications)
@@ -294,6 +298,9 @@ internal fun Home(
                     val startTime = first.uptimeMillis
                     val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
                     val r0 = rt.toRoot(first.position)
+                    // Touches that start on the media player belong to the player (seek bar, buttons), not to Home's swipes.
+                    val pb = playerBounds
+                    if (pb != null && cfg.mediaPlayer && media.visible && pb.contains(r0)) return@awaitEachGesture
                     tracker.addPosition(first.uptimeMillis, r0)
                     var dx = 0f
                     var dy = 0f
@@ -425,15 +432,35 @@ internal fun Home(
         }
         // With the clock hidden, the favorites can sit in the middle of the screen instead of at the bottom.
         val centered = cfg.centerApps && !cfg.showClock
-        Spacer(Modifier.weight(1f))
-        favorites.take(maxFavorites(cfg)).forEach {
-            AppRow(
-                it, 30.sp, p.ink, onClick = { onLaunch(it) },
-                onLongClick = { onBuzz(); onAppMenu(it) }, weight = FontWeight.Normal,
-                marker = if (cfg.notifDots && it.component.packageName in NotifState.active) p.accent else null,
-            )
+        // The favorites live in their own flexible area, so a tall list can never push the search bar off screen.
+        Box(
+            Modifier.weight(1f).fillMaxWidth().clipToBounds(),
+            contentAlignment = when (cfg.homeAlign) {
+                HomeAlign.LEFT -> if (centered) Alignment.CenterStart else Alignment.BottomStart
+                HomeAlign.CENTER -> if (centered) Alignment.Center else Alignment.BottomCenter
+                HomeAlign.RIGHT -> if (centered) Alignment.CenterEnd else Alignment.BottomEnd
+            },
+        ) {
+            Column(horizontalAlignment = cfg.homeAlign.horizontal()) {
+                favorites.take(maxFavorites(cfg)).forEach {
+                    AppRow(
+                        it, 30.sp, p.ink, onClick = { onLaunch(it) },
+                        onLongClick = { onBuzz(); onAppMenu(it) }, weight = FontWeight.Normal,
+                        marker = if (cfg.notifDots && it.component.packageName in NotifState.active) p.accent else null,
+                    )
+                }
+            }
         }
-        if (centered) Spacer(Modifier.weight(1f))
+        androidx.compose.animation.AnimatedVisibility(
+            visible = cfg.mediaPlayer && media.visible,
+            enter = androidx.compose.animation.fadeIn(tw(220)) + androidx.compose.animation.expandVertically(tw(320, easing = EmphasizedDecel)),
+            exit = androidx.compose.animation.fadeOut(tw(140)) + androidx.compose.animation.shrinkVertically(tw(220)),
+        ) {
+            Column {
+                Spacer(Modifier.height(12.dp))
+                MediaPlayerCard(p, media, Modifier.onGloballyPositioned { playerBounds = it.boundsInRoot() })
+            }
+        }
         Spacer(Modifier.height(32.dp))
         Pill(
             p,
