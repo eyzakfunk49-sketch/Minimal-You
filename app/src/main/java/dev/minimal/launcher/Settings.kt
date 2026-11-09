@@ -200,6 +200,9 @@ internal fun SettingsScreen(
         NotificationManagerCompat.getEnabledListenerPackages(ctx).contains(ctx.packageName)
     }
 
+    // Checked fresh on every tap, so a permission granted a moment ago is never asked for again.
+    fun hasNotifAccess() = NotificationManagerCompat.getEnabledListenerPackages(ctx).contains(ctx.packageName)
+
     fun move(i: Int, delta: Int) {
         val j = i + delta
         if (j !in favKeys.indices) return
@@ -399,7 +402,7 @@ internal fun SettingsScreen(
                                 SettingsGroup(p, "Media player") {
                                     SwitchRow("Show media player", cfg.mediaPlayer, p) { on ->
                                         onConfig(cfg.copy(mediaPlayer = on))
-                                        if (on && !notifGranted) {
+                                        if (on && !hasNotifAccess()) {
                                             ctx.startActivity(
                                                 Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
                                                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -532,7 +535,7 @@ internal fun SettingsScreen(
                                 SettingsGroup(p, "Notification dots") {
                                     SwitchRow("Dot on favorites with notifications", cfg.notifDots, p) { on ->
                                         onConfig(cfg.copy(notifDots = on))
-                                        if (on && !notifGranted) {
+                                        if (on && !hasNotifAccess()) {
                                             ctx.startActivity(
                                                 Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
                                                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -541,7 +544,7 @@ internal fun SettingsScreen(
                                     }
                                     SwitchRow("Notification peek", cfg.notifPeek, p) { on ->
                                         onConfig(cfg.copy(notifPeek = on))
-                                        if (on && !notifGranted) {
+                                        if (on && !hasNotifAccess()) {
                                             ctx.startActivity(
                                                 Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
                                                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -759,7 +762,6 @@ internal fun SettingsScreen(
                                 SettingsGroup(p, "Wallpaper") {
                                     SwitchRow("Custom wallpaper", cfg.wallpaperBg, p) { on ->
                                         onConfig(cfg.copy(wallpaperBg = on))
-                                        if (on && !cfg.bgCurrent && !homeBgFile(ctx).exists()) bgPicker.launch(arrayOf("image/*"))
                                     }
                                     if (cfg.wallpaperBg) {
                                         SwitchRow("Use current wallpaper", cfg.bgCurrent, p) { on ->
