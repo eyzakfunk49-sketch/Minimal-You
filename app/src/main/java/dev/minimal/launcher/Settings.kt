@@ -299,9 +299,9 @@ internal fun SettingsScreen(
                                 Triple(SettingsPage.HOME, "Home screen", "Clock, date, weather, calendar"),
                                 Triple(SettingsPage.APPS, "Apps", "Hidden apps, folders, locking, dots"),
                                 Triple(SettingsPage.GESTURES, "Gestures and panels", if (cfg.drawerRight) "All apps from the right" else "All apps from the bottom"),
-                                Triple(SettingsPage.SEARCH, "Search", "Sources and search engine"),
+                                Triple(SettingsPage.SEARCH, "Search", "Sources, engine, history, calculator"),
                                 Triple(SettingsPage.LOOK, "Look and feel", "Font, icons, wallpaper, animations"),
-                                Triple(SettingsPage.EXTRAS, "Extras", "Timer, search extras, backup, tutorial"),
+                                Triple(SettingsPage.EXTRAS, "Extras", "Timer, backup, tutorial"),
                             )
                             items(cats, key = { it.first.name }) { (pg, title, summary) ->
                                 Row(
@@ -691,14 +691,6 @@ internal fun SettingsScreen(
                                 Caption(p, "Touch and hold the clock on Home to start a timer.")
                             }
                             settingsBlock {
-                                SettingsGroup(p, "Search and apps") {
-                                    SwitchRow("Search history", cfg.searchHistory, p) { onConfig(cfg.copy(searchHistory = it)) }
-                                    SwitchRow("Calculator in search", cfg.calculator, p) { onConfig(cfg.copy(calculator = it)) }
-                                    SwitchRow("Suggested apps in search", cfg.recentApps, p) { onConfig(cfg.copy(recentApps = it)) }
-                                }
-                                Caption(p, "Suggested apps shows your 3 most recently opened apps at the top of search while the box is empty. Type a sum such as 12*7 or (3+4)^2 in search to get an answer you can tap to copy.")
-                            }
-                            settingsBlock {
                                 SettingsGroup(p, "Backup") {
                                     val c = LocalContext.current
                                     val exportLauncher = rememberLauncherForActivityResult(
@@ -809,6 +801,14 @@ internal fun SettingsScreen(
                                 SettingsGroup(p, "Search engine") {
                                     Engine.entries.forEach { e -> OptionRow(e.label, e == cfg.engine, p) { onConfig(cfg.copy(engine = e)) } }
                                 }
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Search extras") {
+                                    SwitchRow("Search history", cfg.searchHistory, p) { onConfig(cfg.copy(searchHistory = it)) }
+                                    SwitchRow("Calculator in search", cfg.calculator, p) { onConfig(cfg.copy(calculator = it)) }
+                                    SwitchRow("Suggested apps in search", cfg.recentApps, p) { onConfig(cfg.copy(recentApps = it)) }
+                                }
+                                Caption(p, "Suggested apps shows your 3 most recently opened apps at the top of search while the box is empty. Type a sum such as 12*7 or (3+4)^2 in search to get an answer you can tap to copy.")
                             }
                         }
 

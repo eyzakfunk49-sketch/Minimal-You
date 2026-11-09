@@ -297,27 +297,22 @@ internal fun SearchScreen(
                         }
                     }
                 }
-                item {
-                    val sources = listOfNotNull(
-                        "apps".takeIf { cfg.searchApps },
-                        "contacts".takeIf { cfg.searchContacts },
-                        "files".takeIf { cfg.searchFiles },
-                        "the web".takeIf { cfg.searchWeb },
-                    )
-                    BasicText(
-                        if (sources.isEmpty()) "Nothing is turned on. Pick search sources in Settings."
-                        else "Searching " + sources.joinToString(", ") + ".",
-                        style = ts(p.muted, 15.sp, FontWeight.Normal),
-                        modifier = Modifier.padding(top = 24.dp),
-                    )
+                if (!cfg.searchApps && !cfg.searchContacts && !cfg.searchFiles && !cfg.searchWeb) {
+                    item {
+                        BasicText(
+                            "Nothing is turned on. Pick search sources in Settings.",
+                            style = ts(p.muted, 15.sp, FontWeight.Normal),
+                            modifier = Modifier.padding(top = 24.dp),
+                        )
+                    }
                 }
                 if (cfg.searchHistory && history.isNotEmpty()) {
                     item {
-                        Row(Modifier.fillMaxWidth().padding(top = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
                             Box(Modifier.weight(1f)) { SectionTitle("Recent searches", p) }
                             BasicText(
-                                "Clear", style = ts(p.accent, 14.sp, FontWeight.Medium),
-                                modifier = Modifier.softClick(role = Role.Button) { clearSearchHistory(ctx); history = emptyList() }.padding(8.dp),
+                                "Clear", style = ts(p.accent, 13.sp, FontWeight.Medium),
+                                modifier = Modifier.softClick(role = Role.Button) { clearSearchHistory(ctx); history = emptyList() }.padding(start = 12.dp, top = 12.dp, bottom = 4.dp),
                             )
                         }
                     }
