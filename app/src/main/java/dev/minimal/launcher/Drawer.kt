@@ -62,6 +62,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -277,7 +278,7 @@ internal fun Drawer(
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
-                Modifier.fillMaxSize().fadeEdges(listState),
+                Modifier.fillMaxSize().fadeEdges({ false }, { listState.canScrollForward }, 64.dp),
                 state = listState,
                 contentPadding = PaddingValues(end = 28.dp, bottom = 8.dp),
             ) {
@@ -286,7 +287,16 @@ internal fun Drawer(
                         Box(
                             Modifier
                                 .fillMaxWidth()
-                                .background(p.bg)
+                                .drawBehind {
+                                    // Solid behind the letter, then a soft edge so apps fade out under it.
+                                    drawRect(p.bg)
+                                    val edge = 20.dp.toPx()
+                                    drawRect(
+                                        Brush.verticalGradient(listOf(p.bg, Color.Transparent), startY = size.height, endY = size.height + edge),
+                                        topLeft = Offset(0f, size.height),
+                                        size = androidx.compose.ui.geometry.Size(size.width, edge),
+                                    )
+                                }
                                 .padding(top = 12.dp, bottom = 4.dp)
                                 .graphicsLayer { alpha = if (litLetter == letter) 1f else 1f - 0.65f * focus.value },
                         ) {

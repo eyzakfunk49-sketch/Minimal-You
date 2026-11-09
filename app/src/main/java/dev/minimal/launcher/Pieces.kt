@@ -686,6 +686,9 @@ internal fun RenameOverlay(
 /** True when small monochrome icons are shown beside app names. */
 internal val LocalShowIcons = compositionLocalOf { false }
 
+/** True when the small icons keep their own colors instead of being grayscale. */
+internal val LocalIconsColor = compositionLocalOf { false }
+
 private val iconCache = HashMap<String, androidx.compose.ui.graphics.ImageBitmap>()
 
 /** A small grayscale app icon, loaded off the main thread and remembered. */
@@ -713,8 +716,8 @@ internal fun AppIcon(component: android.content.ComponentName, size: androidx.co
             androidx.compose.foundation.Image(
                 bitmap = b,
                 contentDescription = null,
-                colorFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(0f) }),
-                alpha = 0.85f,
+                colorFilter = if (LocalIconsColor.current) null else androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(0f) }),
+                alpha = if (LocalIconsColor.current) 1f else 0.85f,
                 modifier = Modifier.fillMaxSize().clip(androidx.compose.foundation.shape.CircleShape),
             )
         }
@@ -979,8 +982,8 @@ internal fun Modifier.fadeEdges(
         }
     }
 
-internal fun Modifier.fadeEdges(state: androidx.compose.foundation.lazy.LazyListState): Modifier =
-    fadeEdges({ state.canScrollBackward }, { state.canScrollForward })
+internal fun Modifier.fadeEdges(state: androidx.compose.foundation.lazy.LazyListState, length: androidx.compose.ui.unit.Dp = 24.dp): Modifier =
+    fadeEdges({ state.canScrollBackward }, { state.canScrollForward }, length)
 
 internal fun Modifier.fadeEdges(state: androidx.compose.foundation.ScrollState): Modifier =
     fadeEdges({ state.canScrollBackward }, { state.canScrollForward })

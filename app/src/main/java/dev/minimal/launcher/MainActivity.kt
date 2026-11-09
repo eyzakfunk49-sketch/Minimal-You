@@ -538,7 +538,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
         else Toast.makeText(ctx, "Pick a ${slot.label.lowercase()} app in Settings", Toast.LENGTH_SHORT).show()
     }
 
-    CompositionLocalProvider(LocalFont provides cfg.fontFamily(), LocalLowercase provides cfg.lowercaseApps, LocalShowIcons provides cfg.iconsOn) {
+    CompositionLocalProvider(LocalFont provides cfg.fontFamily(), LocalLowercase provides cfg.lowercaseApps, LocalShowIcons provides cfg.iconsOn, LocalIconsColor provides cfg.iconsColor) {
         val view = LocalView.current
         SideEffect { launchView = view }
         // Android lets an app claim at most ~200dp of each screen edge from the system back gesture.

@@ -183,6 +183,8 @@ data class Config(
     /** Folder name -> keys of the apps inside. Folders show on Home after the favorites. */
     val folders: Map<String, List<String>> = emptyMap(),
     val iconsOn: Boolean = false,
+    /** Icons keep their own colors instead of being grayscale. */
+    val iconsColor: Boolean = false,
     val appLock: Boolean = false,
     val locked: Set<String> = emptySet(),
     val notifPeek: Boolean = false,
@@ -253,6 +255,7 @@ fun loadConfig(ctx: Context): Config {
             o.keys().asSequence().associateWith { k -> val a = o.getJSONArray(k); (0 until a.length()).map { a.getString(it) } }
         } catch (_: Exception) { emptyMap() },
         iconsOn = p.getBoolean("iconsOn", false),
+        iconsColor = p.getBoolean("iconsColor", false),
         appLock = p.getBoolean("appLock", false),
         locked = p.getStringSet("locked", emptySet())?.toSet() ?: emptySet(),
         notifPeek = p.getBoolean("notifPeek", false),
@@ -307,6 +310,7 @@ fun saveConfig(ctx: Context, c: Config) {
         .putBoolean("foldersOn", c.foldersOn)
         .putString("folders", org.json.JSONObject(c.folders.mapValues { org.json.JSONArray(it.value) } as Map<*, *>).toString())
         .putBoolean("iconsOn", c.iconsOn)
+        .putBoolean("iconsColor", c.iconsColor)
         .putBoolean("appLock", c.appLock)
         .putStringSet("locked", c.locked)
         .putBoolean("notifPeek", c.notifPeek)
