@@ -496,7 +496,8 @@ internal fun Home(
                 .onGloballyPositioned { onPillPos(it.positionInRoot().y) }
                 .graphicsLayer {
                     // Hidden the moment the flying copy takes over during the search transition.
-                    alpha = if (searchProgress() > 0.001f) 0f else (1f - drawerProgress() * 4f).coerceIn(0f, 1f)
+                    // Otherwise it fades with the rest of the page (the page layer already does that), not faster.
+                    alpha = if (searchProgress() > 0.001f) 0f else 1f
                 }
                 .softClick(role = Role.Button, onClick = onOpenSearch),
         ) {
