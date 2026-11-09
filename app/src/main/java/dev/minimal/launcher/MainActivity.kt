@@ -9,7 +9,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
-import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.draw.blur
 import android.os.Environment
 import android.text.format.DateFormat
 import android.widget.Toast
@@ -439,20 +439,12 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             controller.show(WindowInsetsCompat.Type.statusBars())
         }
     }
-    // Show the system wallpaper behind Home (optionally blurred). The window itself has to be see-through for that.
-    LaunchedEffect(cfg.wallpaperBg, cfg.wallpaperBlur, p.bg) {
-        var c: Context? = view.context
-        while (c is android.content.ContextWrapper && c !is Activity) c = c.baseContext
-        val w = (c as? Activity)?.window ?: return@LaunchedEffect
-        if (cfg.wallpaperBg) w.addFlags(android.view.WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER)
-        else w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER)
-        w.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(if (cfg.wallpaperBg) 0 else p.bg.toArgb()))
-        val blur = cfg.wallpaperBg && cfg.wallpaperBlur
-        if (blur) w.addFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
-        else w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
-        val a = w.attributes
-        a.blurBehindRadius = if (blur) 60 else 0
-        w.attributes = a
+    // The picked background image, loaded off the main thread.
+    var bgImage by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    LaunchedEffect(cfg.wallpaperBg, cfg.bgStamp) {
+        bgImage = if (cfg.wallpaperBg) withContext(Dispatchers.IO) {
+            try { android.graphics.BitmapFactory.decodeFile(homeBgFile(ctx).path)?.asImageBitmap() } catch (_: Exception) { null }
+        } else null
     }
     // Lowest priority: on Home, back does nothing, which also stops Android's "swipe back to leave the app" shrink animation.
     BackHandler(enabled = true) { }
@@ -590,7 +582,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     )
                     scaleX = zoom; scaleY = zoom; alpha = fade
                 }
-                .background(if (cfg.wallpaperBg) p.bg.copy(alpha = 0.55f) else p.bg)
+                .background(p.bg)
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         val d = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -599,6 +591,15 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     }
                 },
         ) {
+            val bg = bgImage
+            if (bg != null) {
+                Image(
+                    bitmap = bg, contentDescription = null, contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().then(if (cfg.wallpaperBlur) Modifier.blur(28.dp) else Modifier),
+                )
+                // A tint over the picture keeps the text easy to read.
+                Box(Modifier.fillMaxSize().background(p.bg.copy(alpha = 0.55f)))
+            }
             Box(Modifier.fillMaxSize().graphicsLayer {
                 // Fading each draw op directly is much cheaper than rendering the whole page off-screen every frame.
                 compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
@@ -641,6 +642,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                 onBuzz = buzz,
                 onOpenWidgets = { widgetsOpen = true },
                 onClockLong = { buzz(); timerOpen = true },
+                openFolder = openFolder,
                 onFolder = { name, long -> buzz(); if (long) folderEdit = name else openFolder = name },
                 onWidgetsDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { widgetsP.snapTo(f.coerceIn(0f, 1f)) } },
                 onWidgetsEnd = { v ->
@@ -847,16 +849,40 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     onCancel = { folderEdit = null },
                 )
             }
-            openFolder?.let { name ->
-                val byKey = apps.associateBy { it.key }
-                FolderSheet(
-                    p, name, (cfg.folders[name] ?: emptyList()).mapNotNull { byKey[it] },
-                    onLaunch = { openFolder = null; openApp(ctx, it) },
-                    onEdit = { openFolder = null; folderEdit = name },
-                    onDismiss = { openFolder = null },
-                )
+            var lastFolder by remember { mutableStateOf<String?>(null) }
+            if (openFolder != null) lastFolder = openFolder
+            // The card grows up out of the bottom and shrinks back when it closes.
+            AnimatedVisibility(
+                visible = openFolder != null,
+                enter = fadeIn(tw(180)) +
+                    scaleIn(tw(300, easing = EmphasizedDecel), initialScale = 0.9f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 1f)) +
+                    slideInVertically(tw(320, easing = EmphasizedDecel)) { it / 8 },
+                exit = fadeOut(tw(140)) +
+                    scaleOut(tw(180, easing = EmphasizedAccel), targetScale = 0.94f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 1f)) +
+                    androidx.compose.animation.slideOutVertically(tw(180, easing = EmphasizedAccel)) { it / 10 },
+            ) {
+                val name = lastFolder
+                if (name != null) {
+                    val byKey = apps.associateBy { it.key }
+                    FolderSheet(
+                        p, name, (cfg.folders[name] ?: emptyList()).mapNotNull { byKey[it] },
+                        onLaunch = { openFolder = null; openApp(ctx, it) },
+                        onEdit = { openFolder = null; folderEdit = name },
+                        onDismiss = { openFolder = null },
+                    )
+                }
             }
-            if (timerOpen) TimerSheet(p, onStart = { timerOpen = false; startTimer(ctx, it) }, onDismiss = { timerOpen = false })
+            AnimatedVisibility(
+                visible = timerOpen,
+                enter = fadeIn(tw(160)) +
+                    scaleIn(tw(280, easing = EmphasizedDecel), initialScale = 0.92f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 1f)) +
+                    slideInVertically(tw(300, easing = EmphasizedDecel)) { it / 6 },
+                exit = fadeOut(tw(120)) +
+                    scaleOut(tw(160, easing = EmphasizedAccel), targetScale = 0.95f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 1f)) +
+                    androidx.compose.animation.slideOutVertically(tw(160, easing = EmphasizedAccel)) { it / 8 },
+            ) {
+                TimerSheet(p, onStart = { timerOpen = false; startTimer(ctx, it) }, onDismiss = { timerOpen = false })
+            }
             if (tutorialOpen) Tutorial(p, onDone = finishTutorial)
         }
     }

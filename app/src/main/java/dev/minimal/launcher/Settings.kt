@@ -177,6 +177,12 @@ internal fun SettingsScreen(
 
     fun has(permission: String) = ctx.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
+    val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            if (saveHomeBackground(ctx, uri)) onConfig(cfg.copy(wallpaperBg = true, bgStamp = System.currentTimeMillis()))
+            else Toast.makeText(ctx, "That doesn't look like a picture", Toast.LENGTH_LONG).show()
+        }
+    }
     val contactsPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) onConfig(cfg.copy(searchContacts = true))
         else Toast.makeText(ctx, "Contacts permission was denied", Toast.LENGTH_SHORT).show()
@@ -278,10 +284,11 @@ internal fun SettingsScreen(
                                 Triple(SettingsPage.FAVORITES, "Favorites", if (favorites.isEmpty()) "None yet" else "${favorites.size} on Home"),
                                 Triple(SettingsPage.HOME, "Home screen", "Clock, date, weather, calendar"),
                                 Triple(SettingsPage.APPS, "Apps", "Hidden apps, dots, tap actions"),
+                                Triple(SettingsPage.ORGANIZE, "App organization", "Folders and app locking"),
                                 Triple(SettingsPage.GESTURES, "Gestures and panels", if (cfg.drawerRight) "All apps from the right" else "All apps from the bottom"),
                                 Triple(SettingsPage.SEARCH, "Search", "Sources and search engine"),
-                                Triple(SettingsPage.LOOK, "Look and feel", "Font, wallpaper, animations"),
-                                Triple(SettingsPage.EXTRAS, "Extras", "Folders, icons, app lock, timer, wallpaper"),
+                                Triple(SettingsPage.LOOK, "Appearance", "Font, icons, background, animations"),
+                                Triple(SettingsPage.EXTRAS, "Extras", "Timer, search extras, tutorial"),
                             )
                             items(cats, key = { it.first.name }) { (pg, title, summary) ->
                                 Row(
@@ -533,10 +540,19 @@ internal fun SettingsScreen(
                                             )
                                         }
                                     }
+                                    SwitchRow("Notification peek", cfg.notifPeek, p) { on ->
+                                        onConfig(cfg.copy(notifPeek = on))
+                                        if (on && !notifGranted) {
+                                            ctx.startActivity(
+                                                Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                            )
+                                        }
+                                    }
                                 }
                                 Caption(
                                     p,
-                                    if (notifGranted) "Notification access is on. MinimalYou only checks which apps have a notification and never reads its content."
+                                    if (notifGranted) "Notification access is on. Dots only check which apps have a notification. Notification peek also reads the latest title and text, shows it at the top of an app's touch-and-hold menu, and keeps it in memory only."
                                     else "Needs notification access. Turn on MinimalYou notification dots in the list that opens. On Android 13+ you may first need App info > three dots > Allow restricted settings.",
                                 )
                             }
@@ -562,9 +578,9 @@ internal fun SettingsScreen(
                             }
                         }
 
-                        SettingsPage.EXTRAS -> {
+                        SettingsPage.ORGANIZE -> {
                             settingsBlock {
-                                SettingsGroup(p, "Home") {
+                                SettingsGroup(p, "Folders") {
                                     SwitchRow("Folders", cfg.foldersOn, p) { onConfig(cfg.copy(foldersOn = it)) }
                                     if (cfg.foldersOn) {
                                         cfg.folders.keys.forEach { name ->
@@ -580,14 +596,12 @@ internal fun SettingsScreen(
                                         }
                                         ActionRow("New folder", p) { onEditFolder(null) }
                                     }
-                                    SwitchRow("Minimalist icons", cfg.iconsOn, p) { onConfig(cfg.copy(iconsOn = it)) }
-                                    SwitchRow("Quick timer on the clock", cfg.quickTimer, p) { onConfig(cfg.copy(quickTimer = it)) }
                                 }
-                                Caption(p, "Folders show on Home after your favorites and count toward its limit. Minimalist icons add a small grey icon beside each app name. Touch and hold the clock to start a timer.")
+                                Caption(p, "Folders show on Home after your favorites and count toward its limit. Tap one to open it, or touch and hold to edit it.")
                             }
                             settingsBlock {
-                                SettingsGroup(p, "Privacy") {
-                                    SwitchRow("App locking with fingerprint", cfg.appLock, p) { onConfig(cfg.copy(appLock = it)) }
+                                SettingsGroup(p, "App locking") {
+                                    SwitchRow("Lock apps with fingerprint", cfg.appLock, p) { onConfig(cfg.copy(appLock = it)) }
                                     if (cfg.appLock) {
                                         Row(
                                             Modifier.fillMaxWidth().heightIn(min = 52.dp).softClick(role = Role.Button, onClick = onPickLocked),
@@ -599,17 +613,17 @@ internal fun SettingsScreen(
                                             SideChevron(left = false, color = p.muted)
                                         }
                                     }
-                                    SwitchRow("Notification peek", cfg.notifPeek, p) { on ->
-                                        onConfig(cfg.copy(notifPeek = on))
-                                        if (on && !notifGranted) {
-                                            ctx.startActivity(
-                                                Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                                            )
-                                        }
-                                    }
                                 }
-                                Caption(p, "Locked apps ask for your fingerprint or screen lock before opening from Home, the drawer or search. You can also touch and hold an app on Home to lock it. Notification peek shows an app's latest notification in its touch-and-hold menu; it needs notification access, and the text stays in memory only.")
+                                Caption(p, "Locked apps ask for your fingerprint or screen lock before opening from Home, the app list or search. You can also touch and hold an app on Home to lock it.")
+                            }
+                        }
+
+                        SettingsPage.EXTRAS -> {
+                            settingsBlock {
+                                SettingsGroup(p, "Clock") {
+                                    SwitchRow("Quick timer on the clock", cfg.quickTimer, p) { onConfig(cfg.copy(quickTimer = it)) }
+                                }
+                                Caption(p, "Touch and hold the clock on Home to start a timer.")
                             }
                             settingsBlock {
                                 SettingsGroup(p, "Search and apps") {
@@ -618,15 +632,6 @@ internal fun SettingsScreen(
                                     SwitchRow("Recent apps in the app list", cfg.recentApps, p) { onConfig(cfg.copy(recentApps = it)) }
                                 }
                                 Caption(p, "Type a sum such as 12*7 or (3+4)^2 in search to get an answer you can tap to copy.")
-                            }
-                            settingsBlock {
-                                SettingsGroup(p, "Wallpaper") {
-                                    SwitchRow("Show wallpaper behind Home", cfg.wallpaperBg, p) { onConfig(cfg.copy(wallpaperBg = it)) }
-                                    if (cfg.wallpaperBg) {
-                                        SwitchRow("Blur the wallpaper", cfg.wallpaperBlur, p) { onConfig(cfg.copy(wallpaperBlur = it)) }
-                                    }
-                                }
-                                Caption(p, "Shows your system wallpaper under a soft tint so the text stays readable. Blur needs a phone that supports it, and the app list, search and Settings pages stay solid.")
                             }
                             settingsBlock {
                                 SettingsGroup(p, "Help") {
@@ -717,6 +722,40 @@ internal fun SettingsScreen(
                                     SwitchRow("Pitch black", cfg.pitchBlack, p) { onConfig(cfg.copy(pitchBlack = it)) }
                                 }
                                 Caption(p, "Turns the dark grey background true black. Only applies in dark mode.")
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Home background") {
+                                    SwitchRow("Use a picture behind Home", cfg.wallpaperBg, p) { on ->
+                                        onConfig(cfg.copy(wallpaperBg = on))
+                                        if (on && !homeBgFile(ctx).exists()) bgPicker.launch(arrayOf("image/*"))
+                                    }
+                                    if (cfg.wallpaperBg) {
+                                        ActionRow("Choose a picture", p) { bgPicker.launch(arrayOf("image/*")) }
+                                        ActionRow("Use my current wallpaper", p) {
+                                            if (!Environment.isExternalStorageManager()) {
+                                                Toast.makeText(ctx, "Allow file access, then try again", Toast.LENGTH_LONG).show()
+                                                ctx.startActivity(
+                                                    Intent(
+                                                        android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                                        Uri.parse("package:" + ctx.packageName),
+                                                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                                )
+                                            } else if (saveSystemWallpaper(ctx)) {
+                                                onConfig(cfg.copy(bgStamp = System.currentTimeMillis()))
+                                            } else {
+                                                Toast.makeText(ctx, "Couldn't read your wallpaper. Choose a picture instead.", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                        SwitchRow("Blur the picture", cfg.wallpaperBlur, p) { onConfig(cfg.copy(wallpaperBlur = it)) }
+                                    }
+                                }
+                                Caption(p, "Puts a picture behind the Home screen, under a soft tint so the text stays easy to read. The app list, search and Settings keep their solid background.")
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Icons") {
+                                    SwitchRow("Minimalist icons", cfg.iconsOn, p) { onConfig(cfg.copy(iconsOn = it)) }
+                                }
+                                Caption(p, "Adds a small grey icon beside each app name.")
                             }
                             settingsBlock {
                                 SettingsGroup(p, "Font") {

@@ -275,6 +275,8 @@ internal fun Home(
     onClockLong: () -> Unit = {},
     /** A folder row: name, and whether it was a long press (edit) instead of a tap (open). */
     onFolder: (String, Boolean) -> Unit = { _, _ -> },
+    /** Name of the folder that is open right now, so its arrow can point up. */
+    openFolder: String? = null,
 ) {
     val ctx = LocalContext.current
     val now by rememberNow()
@@ -480,6 +482,7 @@ internal fun Home(
                     val isFolder = it.component.packageName == "folder"
                     AppRow(
                         it, (30f * fit).sp, p.ink, minHeight = rowH.dp, minWidth = 180.dp, contentAlign = cfg.homeAlign.horizontal(), label = cfg.labels[it.key],
+                        arrowUp = if (isFolder) openFolder == it.label else null,
                         onClick = { if (isFolder) onFolder(it.label, false) else onLaunch(it) },
                         onLongClick = { onBuzz(); if (isFolder) onFolder(it.label, true) else onAppMenu(it) }, weight = FontWeight.Normal,
                         marker = if (cfg.notifDots && it.component.packageName in NotifState.active) p.accent else null,

@@ -192,6 +192,8 @@ data class Config(
     val recentApps: Boolean = true,
     val wallpaperBg: Boolean = false,
     val wallpaperBlur: Boolean = false,
+    /** Changes when a new background image is picked, so Home reloads it. */
+    val bgStamp: Long = 0L,
 )
 
 fun appPrefs(ctx: Context): SharedPreferences =
@@ -258,6 +260,7 @@ fun loadConfig(ctx: Context): Config {
         recentApps = p.getBoolean("recentApps", true),
         wallpaperBg = p.getBoolean("wallpaperBg", false),
         wallpaperBlur = p.getBoolean("wallpaperBlur", false),
+        bgStamp = p.getLong("bgStamp", 0L),
     )
 }
 
@@ -310,6 +313,7 @@ fun saveConfig(ctx: Context, c: Config) {
         .putBoolean("recentApps", c.recentApps)
         .putBoolean("wallpaperBg", c.wallpaperBg)
         .putBoolean("wallpaperBlur", c.wallpaperBlur)
+        .putLong("bgStamp", c.bgStamp)
         .apply()
 }
 
@@ -554,6 +558,51 @@ fun normalizeUrl(q: String): String =
 fun recordLaunch(ctx: Context, key: String) {
     val p = appPrefs(ctx)
     p.edit().putInt("use_$key", p.getInt("use_$key", 0) + 1).putLong("last_$key", System.currentTimeMillis()).apply()
+}
+
+/** Where the picked Home background image is kept inside the app. */
+fun homeBgFile(ctx: Context) = java.io.File(ctx.filesDir, "home_bg.jpg")
+
+/** Copies the phone's current wallpaper in as the Home background. Needs all-files access to be allowed to read it. */
+fun saveSystemWallpaper(ctx: Context): Boolean {
+    if (!Environment.isExternalStorageManager()) return false
+    return try {
+        val d = android.app.WallpaperManager.getInstance(ctx).drawable ?: return false
+        val w = d.intrinsicWidth.coerceAtLeast(1)
+        val h = d.intrinsicHeight.coerceAtLeast(1)
+        val scale = minOf(1f, 2200f / h)
+        val bmp = android.graphics.Bitmap.createBitmap((w * scale).toInt().coerceAtLeast(1), (h * scale).toInt().coerceAtLeast(1), android.graphics.Bitmap.Config.ARGB_8888)
+        d.setBounds(0, 0, bmp.width, bmp.height)
+        d.draw(android.graphics.Canvas(bmp))
+        val tmp = java.io.File(ctx.filesDir, "home_bg.tmp")
+        tmp.outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it) }
+        val dest = homeBgFile(ctx)
+        dest.delete()
+        tmp.renameTo(dest)
+    } catch (_: Exception) {
+        false
+    }
+}
+
+/** Copies a picked image into the app, shrunk to screen size. Returns false if it isn't a usable picture. */
+fun saveHomeBackground(ctx: Context, uri: Uri): Boolean {
+    return try {
+        val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        ctx.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+        if (opts.outWidth <= 0 || opts.outHeight <= 0) return false
+        var sample = 1
+        while (opts.outHeight / (sample * 2) >= 2200) sample *= 2
+        val bmp = ctx.contentResolver.openInputStream(uri)?.use {
+            android.graphics.BitmapFactory.decodeStream(it, null, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+        } ?: return false
+        val tmp = java.io.File(ctx.filesDir, "home_bg.tmp")
+        tmp.outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it) }
+        val dest = homeBgFile(ctx)
+        dest.delete()
+        tmp.renameTo(dest)
+    } catch (_: Exception) {
+        false
+    }
 }
 
 /** The apps opened most recently, newest first. */

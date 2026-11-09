@@ -183,6 +183,21 @@ internal fun AppMenu(
                 .pointerInput(Unit) { detectTapGestures { } }
                 .padding(horizontal = 24.dp, vertical = 12.dp),
         ) {
+            if (peek != null) {
+                // The latest notification sits at the very top, set apart from the actions by a faint line.
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .background(p.bg.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
+                        .softClick(role = Role.Button, onClick = onPeek)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                ) {
+                    if (peek.first.isNotBlank()) BasicText(peek.first, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.ink, 17.sp, FontWeight.Medium))
+                    if (peek.second.isNotBlank()) BasicText(peek.second, maxLines = 3, overflow = TextOverflow.Ellipsis, style = ts(p.muted, 15.sp, FontWeight.Normal))
+                }
+                Box(Modifier.fillMaxWidth().padding(top = 10.dp).height(1.dp).background(p.muted.copy(alpha = 0.18f)))
+            }
             BasicText(
                 if (LocalLowercase.current) app.label.lowercase() else app.label,
                 maxLines = 1,
@@ -191,19 +206,6 @@ internal fun AppMenu(
                 modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
             )
             if (onRename != null) MenuItem("Edit name", p.ink, onRename)
-            if (peek != null) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 6.dp)
-                        .background(p.bg.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
-                        .softClick(role = Role.Button, onClick = onPeek)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                ) {
-                    if (peek.first.isNotBlank()) BasicText(peek.first, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.ink, 17.sp, FontWeight.Medium))
-                    if (peek.second.isNotBlank()) BasicText(peek.second, maxLines = 3, overflow = TextOverflow.Ellipsis, style = ts(p.muted, 15.sp, FontWeight.Normal))
-                }
-            }
             MenuItem("App info", p.ink, onInfo)
             if (locked != null) MenuItem(if (locked) "Unlock app" else "Lock app", p.ink, onToggleLock)
             MenuItem("Remove from Home", p.ink, onRemove)
@@ -232,6 +234,7 @@ internal enum class SettingsPage(val title: String) {
     GESTURES("Gestures and panels"),
     SEARCH("Search"),
     LOOK("Look and feel"),
+    ORGANIZE("App organization"),
     EXTRAS("Extras"),
 }
 
@@ -468,6 +471,8 @@ internal fun AppRow(
     contentAlign: Alignment.Horizontal = Alignment.Start,
     // Text typed by the user to show instead of the app's own name.
     label: String? = null,
+    // Folders only: null = not a folder, false = closed (arrow down), true = open (arrow up).
+    arrowUp: Boolean? = null,
 ) {
     var textCoords by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
     // Where the middle of the letters really is inside the text box (it differs per font), so the dot lines up with them.
@@ -521,6 +526,28 @@ internal fun AppRow(
                     .size(8.dp)
                     .offset { IntOffset(0, dotShift.roundToInt()) },
             ) { drawCircle(marker) }
+        }
+        if (arrowUp != null) {
+            // Like the dot, the arrow hangs after the name and takes no room, so the name stays put.
+            val turn by animateFloatAsState(if (arrowUp) 180f else 0f, sp(0.75f, 450f), label = "folderArrow")
+            Canvas(
+                Modifier
+                    .layout { measurable, constraints ->
+                        val placeable = measurable.measure(constraints)
+                        val gap = 12.dp.roundToPx()
+                        layout(0, placeable.height) { placeable.place(gap, 0) }
+                    }
+                    .size(16.dp)
+                    .offset { IntOffset(0, dotShift.roundToInt()) }
+                    .graphicsLayer { rotationZ = turn },
+            ) {
+                val w = size.width
+                val h = size.height
+                val sw = w * 0.14f
+                val c = color.copy(alpha = 0.75f)
+                drawLine(c, Offset(w * 0.15f, h * 0.35f), Offset(w * 0.5f, h * 0.7f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(c, Offset(w * 0.5f, h * 0.7f), Offset(w * 0.85f, h * 0.35f), strokeWidth = sw, cap = StrokeCap.Round)
+            }
         }
     }
 }
@@ -735,6 +762,7 @@ internal fun FolderEditor(
     onCancel: () -> Unit,
 ) {
     var name by remember { mutableStateOf(initialName ?: "") }
+    var query by remember { mutableStateOf("") }
     val chosen = remember { mutableStateListOf<String>().apply { addAll(initialKeys) } }
     Column(
         Modifier
@@ -775,8 +803,33 @@ internal fun FolderEditor(
                 },
             )
         }
-        LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp), modifier = Modifier.weight(1f)) {
-            items(apps, key = { it.key }) { app ->
+        Spacer(Modifier.height(10.dp))
+        Pill(p) {
+            SearchIcon(p.accent)
+            Spacer(Modifier.width(12.dp))
+            BasicTextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                textStyle = ts(p.ink, 16.sp, FontWeight.Normal),
+                cursorBrush = SolidColor(p.accent),
+                modifier = Modifier.weight(1f),
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) BasicText("Search apps to add", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                        inner()
+                    }
+                },
+            )
+        }
+        BasicText(
+            if (chosen.isEmpty()) "Pick at least one app" else "${chosen.size} selected",
+            style = ts(p.muted, 14.sp, FontWeight.Normal),
+            modifier = Modifier.padding(top = 10.dp),
+        )
+        val visible = remember(apps, query) { if (query.isBlank()) apps else apps.filter { it.label.contains(query.trim(), ignoreCase = true) } }
+        LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 32.dp), modifier = Modifier.weight(1f)) {
+            items(visible, key = { it.key }) { app ->
                 SwitchRow(app.label, app.key in chosen, p) { if (app.key in chosen) chosen.remove(app.key) else chosen.add(app.key) }
             }
             if (onDelete != null) {
