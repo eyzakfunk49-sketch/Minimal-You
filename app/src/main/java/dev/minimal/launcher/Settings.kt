@@ -43,6 +43,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.zIndex
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -211,6 +216,13 @@ internal fun SettingsScreen(
         onSetFavs(list)
     }
 
+    // Drag-to-reorder for the favorites list.
+    var dragKey by remember { mutableStateOf<String?>(null) }
+    var dragY by remember { mutableFloatStateOf(0f) }
+    var rowStep by remember { mutableFloatStateOf(0f) }
+    val latestKeys by rememberUpdatedState(favKeys)
+    val latestSet by rememberUpdatedState(onSetFavs)
+
     fun setCity() {
         val name = cityInput.trim()
         if (name.isEmpty()) return
@@ -225,7 +237,7 @@ internal fun SettingsScreen(
         }
     }
 
-    BackHandler(enabled = page != null && !coveredByScreen) { page = null }
+    BackHandler(enabled = page != null && !coveredByScreen) { page = settingsParent(page) }
 
     Column(
         Modifier
@@ -238,7 +250,7 @@ internal fun SettingsScreen(
         AnimatedContent(
             targetState = page,
             transitionSpec = {
-                val forward = targetState != null
+                val forward = settingsDepth(targetState) > settingsDepth(initialState)
                 val spec = if (!animationsOn) {
                     EnterTransition.None togetherWith ExitTransition.None
                 } else {
@@ -269,12 +281,12 @@ internal fun SettingsScreen(
                         Modifier
                             .padding(top = 8.dp)
                             .heightIn(min = 48.dp)
-                            .softClick(role = Role.Button) { page = null },
+                            .softClick(role = Role.Button) { page = settingsParent(target) },
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         SideChevron(left = true, color = p.accent)
                         Spacer(Modifier.width(2.dp))
-                        BasicText("Settings", style = ts(p.accent, 15.sp, FontWeight.Medium))
+                        BasicText(settingsParent(target)?.title ?: "Settings", style = ts(p.accent, 15.sp, FontWeight.Medium))
                     }
                     BasicText(target.title, style = ts(p.ink, 34.sp), modifier = Modifier.padding(start = 8.dp, bottom = 8.dp))
                 }
@@ -284,7 +296,6 @@ internal fun SettingsScreen(
                     when (target) {
                         null -> {
                             val cats = listOf(
-                                Triple(SettingsPage.FAVORITES, "Favorites", if (favorites.isEmpty()) "None yet" else "${favorites.size} on Home"),
                                 Triple(SettingsPage.HOME, "Home screen", "Clock, date, weather, calendar"),
                                 Triple(SettingsPage.APPS, "Apps", "Hidden apps, folders, locking, dots"),
                                 Triple(SettingsPage.GESTURES, "Gestures and panels", if (cfg.drawerRight) "All apps from the right" else "All apps from the bottom"),
@@ -313,32 +324,69 @@ internal fun SettingsScreen(
                         }
 
                         SettingsPage.FAVORITES -> {
-                            item(key = "cap") { Caption(p, "Up to $maxFavs apps show on Home. Reorder them, and any folders, with the arrows." + if (cfg.showClock) " Hide the clock to fit 9." else "") }
+                            item(key = "cap") { Caption(p, "Up to $maxFavs apps show on Home. Reorder them, and any folders, with the arrows or by dragging the handle." + if (cfg.showClock) " Hide the clock to fit 9." else "") }
                             if (favorites.isEmpty()) {
                                 item(key = "empty") { Caption(p, "No favorites yet. Add some below.") }
                             }
                             itemsIndexed(favorites, key = { _, a -> a.key }) { i, app ->
+                                val dragging = dragKey == app.key
+                                val isFolder = app.component.packageName == "folder"
                                 Row(
-                                    itemAnim()
+                                    (if (dragging) Modifier else itemAnim())
+                                        .zIndex(if (dragging) 1f else 0f)
+                                        .graphicsLayer {
+                                            translationY = if (dragging) dragY else 0f
+                                            scaleX = if (dragging) 1.02f else 1f
+                                            scaleY = if (dragging) 1.02f else 1f
+                                        }
+                                        .onSizeChanged { rowStep = it.height.toFloat() }
                                         .padding(vertical = 4.dp)
                                         .fillMaxWidth()
-                                        .background(p.pill.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
+                                        .background(if (dragging) p.pill else p.pill.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
                                         .padding(start = 20.dp, end = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    val isFolder = app.component.packageName == "folder"
-                                    BasicText(
-                                        app.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                        style = ts(p.ink, 20.sp),
-                                        modifier = Modifier.weight(1f, fill = !isFolder),
-                                    )
-                                    if (isFolder) {
-                                        BasicText("folder", style = ts(p.muted, 14.sp, FontWeight.Normal), modifier = Modifier.weight(1f).padding(start = 8.dp))
+                                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                                        BasicText(
+                                            app.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                            style = ts(p.ink, 20.sp),
+                                            modifier = Modifier.weight(1f, fill = false),
+                                        )
+                                        if (isFolder) {
+                                            BasicText("folder", style = ts(p.muted, 14.sp, FontWeight.Normal), modifier = Modifier.padding(start = 8.dp))
+                                        }
                                     }
                                     IconBtn(Glyph.UP, "Move ${app.label} up", if (i > 0) p.muted else p.muted.copy(alpha = 0.3f), i > 0) { move(i, -1) }
                                     IconBtn(Glyph.DOWN, "Move ${app.label} down", if (i < favorites.lastIndex) p.muted else p.muted.copy(alpha = 0.3f), i < favorites.lastIndex) { move(i, 1) }
                                     if (isFolder) Spacer(Modifier.width(48.dp))
                                     else IconBtn(Glyph.CLOSE, "Remove ${app.label}", p.muted) { onSetFavs(favKeys - app.key) }
+                                    DragGrip(
+                                        p.muted,
+                                        Modifier.pointerInput(app.key) {
+                                            detectDragGestures(
+                                                onDragStart = { dragKey = app.key; dragY = 0f },
+                                                onDragEnd = { dragKey = null; dragY = 0f },
+                                                onDragCancel = { dragKey = null; dragY = 0f },
+                                            ) { change, amount ->
+                                                change.consume()
+                                                dragY += amount.y
+                                                val at = latestKeys.indexOf(app.key)
+                                                if (rowStep > 0f && at >= 0) {
+                                                    val to = when {
+                                                        dragY > rowStep / 2 && at < latestKeys.lastIndex -> at + 1
+                                                        dragY < -rowStep / 2 && at > 0 -> at - 1
+                                                        else -> at
+                                                    }
+                                                    if (to != at) {
+                                                        val list = latestKeys.toMutableList()
+                                                        val t = list[at]; list[at] = list[to]; list[to] = t
+                                                        latestSet(list)
+                                                        dragY -= (to - at) * rowStep
+                                                    }
+                                                }
+                                            }
+                                        },
+                                    )
                                 }
                             }
                             item(key = "addBtn") {
@@ -431,7 +479,7 @@ internal fun SettingsScreen(
                             settingsBlock {
                                 SettingsGroup(p, "Clock style") {
                                     SwitchRow("Show clock", cfg.showClock, p) { onConfig(cfg.copy(showClock = it)) }
-                                    if (!cfg.showClock) {
+                                    Reveal(!cfg.showClock) {
                                         SwitchRow("Center apps on screen", cfg.centerApps, p) { onConfig(cfg.copy(centerApps = it)) }
                                     }
                                     ClockStyle.entries.forEach { s ->
@@ -508,17 +556,30 @@ internal fun SettingsScreen(
                             settingsBlock {
                                 SettingsGroup(p, "Status bar") {
                                     SwitchRow("Hide status bar", cfg.hideStatusBar, p) { onConfig(cfg.copy(hideStatusBar = it)) }
-                                    if (cfg.hideStatusBar) {
+                                    Reveal(cfg.hideStatusBar) {
                                         SwitchRow("Battery on Home", cfg.showBattery, p) { onConfig(cfg.copy(showBattery = it)) }
                                     }
                                 }
-                                if (cfg.hideStatusBar) {
+                                Reveal(cfg.hideStatusBar) {
                                     Caption(p, "The battery level shows next to the weather on Home. Swipe down from the very top edge to peek at the real status bar.")
                                 }
                             }
                         }
 
                         SettingsPage.APPS -> {
+                            settingsBlock {
+                                SettingsGroup(p, "Home") {
+                                    Row(
+                                        Modifier.fillMaxWidth().heightIn(min = 52.dp).softClick(role = Role.Button) { page = SettingsPage.FAVORITES },
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        BasicText("Favorites", style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
+                                        BasicText(if (favorites.isEmpty()) "None yet" else "${favorites.size} on Home", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                                        Spacer(Modifier.width(8.dp))
+                                        SideChevron(left = false, color = p.muted)
+                                    }
+                                }
+                            }
                             settingsBlock {
                                 SettingsGroup(p, "Hidden apps") {
                                     Row(
@@ -586,7 +647,7 @@ internal fun SettingsScreen(
                             settingsBlock {
                                 SettingsGroup(p, "Folders") {
                                     SwitchRow("Folders", cfg.foldersOn, p) { onConfig(cfg.copy(foldersOn = it)) }
-                                    if (cfg.foldersOn) {
+                                    Reveal(cfg.foldersOn) {
                                         cfg.folders.keys.forEach { name ->
                                             Row(
                                                 Modifier.fillMaxWidth().heightIn(min = 52.dp).softClick(role = Role.Button) { onEditFolder(name) },
@@ -606,7 +667,7 @@ internal fun SettingsScreen(
                             settingsBlock {
                                 SettingsGroup(p, "App locking") {
                                     SwitchRow("Lock apps with fingerprint", cfg.appLock, p) { onConfig(cfg.copy(appLock = it)) }
-                                    if (cfg.appLock) {
+                                    Reveal(cfg.appLock) {
                                         Row(
                                             Modifier.fillMaxWidth().heightIn(min = 52.dp).softClick(role = Role.Button, onClick = onPickLocked),
                                             verticalAlignment = Alignment.CenterVertically,
@@ -685,7 +746,7 @@ internal fun SettingsScreen(
                                 SettingsGroup(p, "All apps panel") {
                                     OptionRow("From the bottom (swipe up)", !cfg.drawerRight, p) { onConfig(cfg.copy(drawerRight = false)) }
                                     OptionRow("From the right (swipe left)", cfg.drawerRight, p) { onConfig(cfg.copy(drawerRight = true)) }
-                                    if (cfg.drawerRight) {
+                                    Reveal(cfg.drawerRight) {
                                         SwitchRow("Swipe up to start search", cfg.swipeUpSearch, p) { onConfig(cfg.copy(swipeUpSearch = it)) }
                                     }
                                 }
@@ -768,7 +829,7 @@ internal fun SettingsScreen(
                                     SwitchRow("Custom wallpaper", cfg.wallpaperBg, p) { on ->
                                         onConfig(cfg.copy(wallpaperBg = on))
                                     }
-                                    if (cfg.wallpaperBg) {
+                                    Reveal(cfg.wallpaperBg) {
                                         SwitchRow("Use current wallpaper", cfg.bgCurrent, p) { on ->
                                             if (!on) {
                                                 onConfig(cfg.copy(bgCurrent = false))
@@ -786,11 +847,12 @@ internal fun SettingsScreen(
                                                 Toast.makeText(ctx, "Android won't let apps read the current wallpaper on this phone. Choose a custom image instead.", Toast.LENGTH_LONG).show()
                                             }
                                         }
-                                        if (!cfg.bgCurrent) {
+                                        Reveal(!cfg.bgCurrent) {
                                             ActionRow("Choose a custom image", p) { bgPicker.launch(arrayOf("image/*")) }
                                         }
                                         SwitchRow("Blur wallpaper", cfg.wallpaperBlur, p) { onConfig(cfg.copy(wallpaperBlur = it)) }
-                                    } else {
+                                    }
+                                    Reveal(!cfg.wallpaperBg) {
                                         val c = LocalContext.current
                                         Row(
                                             Modifier
@@ -823,7 +885,7 @@ internal fun SettingsScreen(
                             settingsBlock {
                                 SettingsGroup(p, "Icons") {
                                     SwitchRow("Icons", cfg.iconsOn, p) { onConfig(cfg.copy(iconsOn = it)) }
-                                    if (cfg.iconsOn) {
+                                    Reveal(cfg.iconsOn) {
                                         OptionRow("Black and white", !cfg.iconsColor, p) { onConfig(cfg.copy(iconsColor = false)) }
                                         OptionRow("Color", cfg.iconsColor, p) { onConfig(cfg.copy(iconsColor = true)) }
                                     }
@@ -853,3 +915,8 @@ internal fun SettingsScreen(
         }
     }
 }
+
+/** Favorites lives inside Apps; every other page hangs off the main Settings list. */
+private fun settingsParent(pg: SettingsPage?): SettingsPage? = if (pg == SettingsPage.FAVORITES) SettingsPage.APPS else null
+
+private fun settingsDepth(pg: SettingsPage?): Int = when (pg) { null -> 0; SettingsPage.FAVORITES -> 2; else -> 1 }

@@ -228,6 +228,29 @@ internal fun MenuItem(label: String, color: Color, onClick: () -> Unit) {
 
 // ---------- Pieces ----------
 
+/** Shows or hides settings rows with a soft slide and fade instead of popping them in. */
+@Composable
+internal fun Reveal(visible: Boolean, content: @Composable () -> Unit) {
+    androidx.compose.animation.AnimatedVisibility(
+        visible = visible,
+        enter = androidx.compose.animation.fadeIn(tw(200)) + androidx.compose.animation.expandVertically(tw(280, EmphasizedDecel)),
+        exit = androidx.compose.animation.fadeOut(tw(120)) + androidx.compose.animation.shrinkVertically(tw(200, EmphasizedAccel)),
+    ) { content() }
+}
+
+/** The three-line handle you hold to drag a row. */
+@Composable
+internal fun DragGrip(color: Color, modifier: Modifier = Modifier) {
+    Box(modifier.size(width = 44.dp, height = 48.dp), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(18.dp)) {
+            val w = this.size.minDimension * 0.11f
+            for (f in listOf(0.22f, 0.5f, 0.78f)) {
+                drawLine(color, Offset(0f, this.size.height * f), Offset(this.size.width, this.size.height * f), strokeWidth = w, cap = StrokeCap.Round)
+            }
+        }
+    }
+}
+
 internal enum class SettingsPage(val title: String) {
     FAVORITES("Favorites"),
     HOME("Home screen"),
