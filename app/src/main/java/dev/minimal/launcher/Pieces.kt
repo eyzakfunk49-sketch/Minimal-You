@@ -541,8 +541,9 @@ internal fun AppRow(
                     .offset { IntOffset(0, dotShift.roundToInt()) }
                     .graphicsLayer { rotationZ = turn },
             ) {
-                val w = size.width
-                val h = size.height
+                // "this.size": the row's own text-size parameter is also called size.
+                val w = this.size.width
+                val h = this.size.height
                 val sw = w * 0.14f
                 val c = color.copy(alpha = 0.75f)
                 drawLine(c, Offset(w * 0.15f, h * 0.35f), Offset(w * 0.5f, h * 0.7f), strokeWidth = sw, cap = StrokeCap.Round)
