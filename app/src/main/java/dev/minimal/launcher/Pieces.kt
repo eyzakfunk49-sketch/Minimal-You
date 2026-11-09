@@ -167,6 +167,11 @@ internal fun AppMenu(
     /** null = app locking is off; otherwise whether this app is locked. */
     locked: Boolean? = null,
     onToggleLock: () -> Unit = {},
+    /** Whether the app is already a favorite on Home. */
+    pinned: Boolean = true,
+    /** False when Home is full, which greys out "Add to Home". */
+    canPin: Boolean = true,
+    onPin: () -> Unit = {},
 ) {
     Box(
         Modifier
@@ -209,7 +214,8 @@ internal fun AppMenu(
             if (onRename != null) MenuItem("Edit name", p.ink, onRename)
             MenuItem("App info", p.ink, onInfo)
             if (locked != null) MenuItem(if (locked) "Unlock app" else "Lock app", p.ink, onToggleLock)
-            MenuItem("Remove from Home", p.ink, onRemove)
+            if (pinned) MenuItem("Remove from Home", p.ink, onRemove)
+            else MenuItem(if (canPin) "Add to Home" else "Add to Home (Home is full)", p.ink, onPin, enabled = canPin)
             MenuItem("Hide app", p.ink, onHide)
             MenuItem("Uninstall", p.accent, onUninstall)
         }
@@ -217,12 +223,12 @@ internal fun AppMenu(
 }
 
 @Composable
-internal fun MenuItem(label: String, color: Color, onClick: () -> Unit) {
+internal fun MenuItem(label: String, color: Color, onClick: () -> Unit, enabled: Boolean = true) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 52.dp).softClick(role = Role.Button, onClick = onClick),
+        Modifier.fillMaxWidth().heightIn(min = 52.dp).then(if (enabled) Modifier.softClick(role = Role.Button, onClick = onClick) else Modifier),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        BasicText(label, style = ts(color, 20.sp))
+        BasicText(label, style = ts(if (enabled) color else color.copy(alpha = 0.35f), 20.sp))
     }
 }
 

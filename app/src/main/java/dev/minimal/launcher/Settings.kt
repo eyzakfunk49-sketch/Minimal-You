@@ -694,9 +694,9 @@ internal fun SettingsScreen(
                                 SettingsGroup(p, "Search and apps") {
                                     SwitchRow("Search history", cfg.searchHistory, p) { onConfig(cfg.copy(searchHistory = it)) }
                                     SwitchRow("Calculator in search", cfg.calculator, p) { onConfig(cfg.copy(calculator = it)) }
-                                    SwitchRow("Recent apps in the app list", cfg.recentApps, p) { onConfig(cfg.copy(recentApps = it)) }
+                                    SwitchRow("Suggested apps in search", cfg.recentApps, p) { onConfig(cfg.copy(recentApps = it)) }
                                 }
-                                Caption(p, "Type a sum such as 12*7 or (3+4)^2 in search to get an answer you can tap to copy.")
+                                Caption(p, "Suggested apps shows your 3 most recently opened apps at the top of search while the box is empty. Type a sum such as 12*7 or (3+4)^2 in search to get an answer you can tap to copy.")
                             }
                             settingsBlock {
                                 SettingsGroup(p, "Backup") {

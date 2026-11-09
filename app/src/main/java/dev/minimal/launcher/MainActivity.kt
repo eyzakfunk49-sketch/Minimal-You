@@ -420,7 +420,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     val visibleApps = remember(apps, cfg.hidden) { apps.filter { it.key !in cfg.hidden } }
     var hiddenOpen by remember { mutableStateOf(false) }
 
-    val recentList = remember(visibleApps, drawerOpen) { recentApps(ctx, visibleApps, 3) }
+    val recentList = remember(visibleApps, searchOpen) { recentApps(ctx, visibleApps, 3) }
     val updateCfg: (Config) -> Unit = { next ->
         cfg = next
         saveConfig(ctx, next)
@@ -454,7 +454,6 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     }
     // Lowest priority: on Home, back does nothing, which also stops Android's "swipe back to leave the app" shrink animation.
     BackHandler(enabled = true) { }
-    BackHandler(enabled = menuApp != null) { menuApp = null }
     BackHandler(enabled = drawerOpen) { drawerOpen = false }
     BackHandler(enabled = widgetsOpen) { widgetsOpen = false }
     BackHandler(enabled = searchOpen) { searchOpen = false }
@@ -480,6 +479,8 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     BackHandler(enabled = openFolder != null) { openFolder = null }
     BackHandler(enabled = timerOpen) { timerOpen = false }
     BackHandler(enabled = lockPickerOpen) { lockPickerOpen = false }
+    // The touch-and-hold menu can open over the app list, so it takes Back before the list does.
+    BackHandler(enabled = menuApp != null) { menuApp = null }
     BackHandler(enabled = folderEdit != null) { folderEdit = null }
     BackHandler(enabled = renameApp != null) { renameApp = null }
     BackHandler(enabled = tutorialOpen) { finishTutorial() } // registered last = handled first
@@ -702,8 +703,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                         active = drawerVisible,
                         progress = { drawerP.value },
                         onLaunch = { openApp(ctx, it) },
-                        recent = if (cfg.recentApps) recentList else emptyList(),
-                        onTogglePin = togglePin,
+                        onAppMenu = { menuApp = it },
                         onClose = { drawerOpen = false },
                         onDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { drawerP.snapTo(f.coerceIn(0f, 1f)) } },
                         onEnd = { v ->
@@ -725,6 +725,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                         p, cfg, visibleApps,
                         active = searchOpen,
                         pillShown = pillSettled,
+                        recent = if (cfg.recentApps) recentList else emptyList(),
                         onClose = { searchOpen = false },
                         onDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { searchP.snapTo(f.coerceIn(0f, 1f)) } },
                         onEnd = { v ->
@@ -752,7 +753,10 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     val pkg = app.component.packageName
                     AppMenu(
                         p, app,
-                        onRename = { menuApp = null; renameApp = app },
+                        onRename = if (favorites.any { it.key == app.key }) ({ menuApp = null; renameApp = app }) else null,
+                        pinned = favorites.any { it.key == app.key },
+                        canPin = favorites.size < maxFavorites(cfg),
+                        onPin = { menuApp = null; togglePin(app) },
                         peek = if (cfg.notifPeek) NotifState.latest[pkg] else null,
                         onPeek = { menuApp = null; openApp(ctx, app) },
                         locked = if (cfg.appLock) app.key in cfg.locked else null,

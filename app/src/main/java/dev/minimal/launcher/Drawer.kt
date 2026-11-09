@@ -163,12 +163,10 @@ internal fun Drawer(
     active: Boolean,
     progress: () -> Float,
     onLaunch: (App) -> Unit,
-    onTogglePin: (App) -> Unit,
+    onAppMenu: (App) -> Unit,
     onClose: () -> Unit,
     onDrag: (Float) -> Unit,
     onEnd: (Float) -> Unit,
-    /** Most recently opened apps, shown above the list while not searching. */
-    recent: List<App> = emptyList(),
 ) {
     val curDragDrawer by rememberUpdatedState(onDrag)
     val rt = remember { RootTracker() }
@@ -258,24 +256,6 @@ internal fun Drawer(
             .padding(horizontal = 32.dp),
     ) {
         Spacer(Modifier.height(24.dp))
-        if (recent.isNotEmpty() && query.isBlank() && asApps) {
-            Row(
-                Modifier.fillMaxWidth().padding(bottom = 4.dp).horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                recent.forEach { app ->
-                    BasicText(
-                        if (LocalLowercase.current) app.label.lowercase() else app.label,
-                        maxLines = 1,
-                        style = ts(p.ink, 16.sp, FontWeight.Normal),
-                        modifier = Modifier
-                            .background(p.pill, RoundedCornerShape(20.dp))
-                            .softClick(role = Role.Button) { onLaunch(app) }
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                    )
-                }
-            }
-        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 Modifier.fillMaxSize().fadeEdges({ false }, { listState.canScrollForward }, 64.dp),
@@ -308,7 +288,7 @@ internal fun Drawer(
                         AppRow(
                             app, 22.sp, p.ink,
                             onClick = { onLaunch(app) },
-                            onLongClick = { onTogglePin(app) },
+                            onLongClick = { onAppMenu(app) },
                             weight = if (activeLetter == letter) FontWeight.SemiBold else if (isPinned) FontWeight.Medium else FontWeight.Light,
                             marker = if (isPinned) p.accent else null,
                             fullWidth = true,

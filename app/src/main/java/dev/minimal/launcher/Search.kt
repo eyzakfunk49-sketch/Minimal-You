@@ -45,6 +45,8 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
@@ -153,6 +155,7 @@ internal fun SearchScreen(
     apps: List<App>,
     active: Boolean,
     pillShown: Boolean,
+    recent: List<App> = emptyList(),
     onClose: () -> Unit,
     onDrag: (Float) -> Unit,
     onEnd: (Float) -> Unit,
@@ -274,6 +277,26 @@ internal fun SearchScreen(
         }
         LazyColumn(Modifier.fadeEdges(listState), state = listState, contentPadding = PaddingValues(bottom = 24.dp)) {
             if (q.isEmpty()) {
+                if (recent.isNotEmpty()) {
+                    item(key = "recentApps") {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 20.dp).horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            recent.forEach { app ->
+                                BasicText(
+                                    if (LocalLowercase.current) app.label.lowercase() else app.label,
+                                    maxLines = 1,
+                                    style = ts(p.ink, 16.sp, FontWeight.Normal),
+                                    modifier = Modifier
+                                        .background(p.pill, RoundedCornerShape(20.dp))
+                                        .softClick(role = Role.Button) { openApp(ctx, app); onClose() }
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                )
+                            }
+                        }
+                    }
+                }
                 item {
                     val sources = listOfNotNull(
                         "apps".takeIf { cfg.searchApps },
