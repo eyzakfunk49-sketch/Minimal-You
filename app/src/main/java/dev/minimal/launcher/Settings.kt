@@ -159,6 +159,9 @@ internal fun SettingsScreen(
     // True while a screen is open on top of Settings (hidden apps, app picker); Back then belongs to that screen.
     coveredByScreen: Boolean,
     onBack: () -> Unit,
+    onEditFolder: (String?) -> Unit = {},
+    onPickLocked: () -> Unit = {},
+    onShowTutorial: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -278,6 +281,7 @@ internal fun SettingsScreen(
                                 Triple(SettingsPage.GESTURES, "Gestures and panels", if (cfg.drawerRight) "All apps from the right" else "All apps from the bottom"),
                                 Triple(SettingsPage.SEARCH, "Search", "Sources and search engine"),
                                 Triple(SettingsPage.LOOK, "Look and feel", "Font, wallpaper, animations"),
+                                Triple(SettingsPage.EXTRAS, "Extras", "Folders, icons, app lock, timer, wallpaper"),
                             )
                             items(cats, key = { it.first.name }) { (pg, title, summary) ->
                                 Row(
@@ -555,6 +559,79 @@ internal fun SettingsScreen(
                                     }
                                 }
                                 Caption(p, "Pick which app opens when you tap the clock, the date, or the weather on Home.")
+                            }
+                        }
+
+                        SettingsPage.EXTRAS -> {
+                            settingsBlock {
+                                SettingsGroup(p, "Home") {
+                                    SwitchRow("Folders", cfg.foldersOn, p) { onConfig(cfg.copy(foldersOn = it)) }
+                                    if (cfg.foldersOn) {
+                                        cfg.folders.keys.forEach { name ->
+                                            Row(
+                                                Modifier.fillMaxWidth().heightIn(min = 52.dp).softClick(role = Role.Button) { onEditFolder(name) },
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
+                                                BasicText(name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
+                                                BasicText("${cfg.folders[name]?.size ?: 0} apps", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                                                Spacer(Modifier.width(8.dp))
+                                                SideChevron(left = false, color = p.muted)
+                                            }
+                                        }
+                                        ActionRow("New folder", p) { onEditFolder(null) }
+                                    }
+                                    SwitchRow("Minimalist icons", cfg.iconsOn, p) { onConfig(cfg.copy(iconsOn = it)) }
+                                    SwitchRow("Quick timer on the clock", cfg.quickTimer, p) { onConfig(cfg.copy(quickTimer = it)) }
+                                }
+                                Caption(p, "Folders show on Home after your favorites and count toward its limit. Minimalist icons add a small grey icon beside each app name. Touch and hold the clock to start a timer.")
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Privacy") {
+                                    SwitchRow("App locking with fingerprint", cfg.appLock, p) { onConfig(cfg.copy(appLock = it)) }
+                                    if (cfg.appLock) {
+                                        Row(
+                                            Modifier.fillMaxWidth().heightIn(min = 52.dp).softClick(role = Role.Button, onClick = onPickLocked),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            BasicText("Choose apps to lock", style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
+                                            BasicText(if (cfg.locked.isEmpty()) "None" else "${cfg.locked.size}", style = ts(p.muted, 16.sp, FontWeight.Normal))
+                                            Spacer(Modifier.width(8.dp))
+                                            SideChevron(left = false, color = p.muted)
+                                        }
+                                    }
+                                    SwitchRow("Notification peek", cfg.notifPeek, p) { on ->
+                                        onConfig(cfg.copy(notifPeek = on))
+                                        if (on && !notifGranted) {
+                                            ctx.startActivity(
+                                                Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                            )
+                                        }
+                                    }
+                                }
+                                Caption(p, "Locked apps ask for your fingerprint or screen lock before opening from Home, the drawer or search. You can also touch and hold an app on Home to lock it. Notification peek shows an app's latest notification in its touch-and-hold menu; it needs notification access, and the text stays in memory only.")
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Search and apps") {
+                                    SwitchRow("Search history", cfg.searchHistory, p) { onConfig(cfg.copy(searchHistory = it)) }
+                                    SwitchRow("Calculator in search", cfg.calculator, p) { onConfig(cfg.copy(calculator = it)) }
+                                    SwitchRow("Recent apps in the app list", cfg.recentApps, p) { onConfig(cfg.copy(recentApps = it)) }
+                                }
+                                Caption(p, "Type a sum such as 12*7 or (3+4)^2 in search to get an answer you can tap to copy.")
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Wallpaper") {
+                                    SwitchRow("Show wallpaper behind Home", cfg.wallpaperBg, p) { onConfig(cfg.copy(wallpaperBg = it)) }
+                                    if (cfg.wallpaperBg) {
+                                        SwitchRow("Blur the wallpaper", cfg.wallpaperBlur, p) { onConfig(cfg.copy(wallpaperBlur = it)) }
+                                    }
+                                }
+                                Caption(p, "Shows your system wallpaper under a soft tint so the text stays readable. Blur needs a phone that supports it, and the app list, search and Settings pages stay solid.")
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Help") {
+                                    ActionRow("Show the tutorial again", p, onShowTutorial)
+                                }
                             }
                         }
 

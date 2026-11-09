@@ -197,6 +197,9 @@ internal fun SearchScreen(
     }
 
     val webSearchUrl = cfg.engine.base + URLEncoder.encode(q, "UTF-8")
+    var history by remember { mutableStateOf(readSearchHistory(ctx)) }
+    val saveQuery = { if (cfg.searchHistory) { addSearchHistory(ctx, q); history = readSearchHistory(ctx) } }
+    val calc = if (cfg.calculator) remember(q) { calculate(q) } else null
 
     Column(
         Modifier
@@ -250,6 +253,7 @@ internal fun SearchScreen(
                 cursorBrush = SolidColor(p.accent),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = {
+                    saveQuery()
                     val top = appHits.firstOrNull()
                     if (top != null) {
                         openApp(ctx, top)
@@ -284,10 +288,34 @@ internal fun SearchScreen(
                         modifier = Modifier.padding(top = 24.dp),
                     )
                 }
+                if (cfg.searchHistory && history.isNotEmpty()) {
+                    item {
+                        Row(Modifier.fillMaxWidth().padding(top = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.weight(1f)) { SectionTitle("Recent searches", p) }
+                            BasicText(
+                                "Clear", style = ts(p.accent, 14.sp, FontWeight.Medium),
+                                modifier = Modifier.softClick(role = Role.Button) { clearSearchHistory(ctx); history = emptyList() }.padding(8.dp),
+                            )
+                        }
+                    }
+                    items(history, key = { "hist$it" }) { h ->
+                        WebRow(p, h) { query = h }
+                    }
+                }
             } else {
+                if (calc != null) {
+                    item {
+                        WebRow(p, "= $calc   (tap to copy)") {
+                            val cm = ctx.getSystemService(android.content.ClipboardManager::class.java)
+                            cm.setPrimaryClip(android.content.ClipData.newPlainText("result", calc))
+                            Toast.makeText(ctx, "Copied $calc", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
                 if (cfg.searchWeb) {
                     item {
                         WebRow(p, "Search ${cfg.engine.label} for “$q”") {
+                            saveQuery()
                             openUrl(ctx, webSearchUrl)
                             onClose()
                         }
@@ -304,7 +332,7 @@ internal fun SearchScreen(
                 if (appHits.isNotEmpty()) {
                     item { SectionTitle("Apps", p) }
                     items(appHits, key = { "app" + it.key }) { app ->
-                        AppRow(app, 22.sp, p.ink, onClick = { openApp(ctx, app); onClose() }, fullWidth = true)
+                        AppRow(app, 22.sp, p.ink, onClick = { saveQuery(); openApp(ctx, app); onClose() }, fullWidth = true)
                     }
                 }
                 if (contacts.isNotEmpty()) {

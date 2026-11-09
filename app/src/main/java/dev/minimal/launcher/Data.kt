@@ -178,6 +178,20 @@ data class Config(
     val hidden: Set<String> = emptySet(),
     /** Names the user typed for favorites on Home (app key -> text). */
     val labels: Map<String, String> = emptyMap(),
+    // Extras. Each one has its own switch in Settings > Extras.
+    val foldersOn: Boolean = true,
+    /** Folder name -> keys of the apps inside. Folders show on Home after the favorites. */
+    val folders: Map<String, List<String>> = emptyMap(),
+    val iconsOn: Boolean = false,
+    val appLock: Boolean = false,
+    val locked: Set<String> = emptySet(),
+    val notifPeek: Boolean = false,
+    val searchHistory: Boolean = true,
+    val calculator: Boolean = true,
+    val quickTimer: Boolean = true,
+    val recentApps: Boolean = true,
+    val wallpaperBg: Boolean = false,
+    val wallpaperBlur: Boolean = false,
 )
 
 fun appPrefs(ctx: Context): SharedPreferences =
@@ -229,6 +243,21 @@ fun loadConfig(ctx: Context): Config {
             val o = org.json.JSONObject(p.getString("labels", "{}") ?: "{}")
             o.keys().asSequence().associateWith { o.getString(it) }
         } catch (_: Exception) { emptyMap() },
+        foldersOn = p.getBoolean("foldersOn", true),
+        folders = try {
+            val o = JSONObject(p.getString("folders", "{}") ?: "{}")
+            o.keys().asSequence().associateWith { k -> val a = o.getJSONArray(k); (0 until a.length()).map { a.getString(it) } }
+        } catch (_: Exception) { emptyMap() },
+        iconsOn = p.getBoolean("iconsOn", false),
+        appLock = p.getBoolean("appLock", false),
+        locked = p.getStringSet("locked", emptySet())?.toSet() ?: emptySet(),
+        notifPeek = p.getBoolean("notifPeek", false),
+        searchHistory = p.getBoolean("searchHistory", true),
+        calculator = p.getBoolean("calculator", true),
+        quickTimer = p.getBoolean("quickTimer", true),
+        recentApps = p.getBoolean("recentApps", true),
+        wallpaperBg = p.getBoolean("wallpaperBg", false),
+        wallpaperBlur = p.getBoolean("wallpaperBlur", false),
     )
 }
 
@@ -269,6 +298,18 @@ fun saveConfig(ctx: Context, c: Config) {
         .putBoolean("noHaptics", c.noHaptics)
         .putStringSet("hidden", c.hidden)
         .putString("labels", org.json.JSONObject(c.labels as Map<*, *>).toString())
+        .putBoolean("foldersOn", c.foldersOn)
+        .putString("folders", org.json.JSONObject(c.folders.mapValues { org.json.JSONArray(it.value) } as Map<*, *>).toString())
+        .putBoolean("iconsOn", c.iconsOn)
+        .putBoolean("appLock", c.appLock)
+        .putStringSet("locked", c.locked)
+        .putBoolean("notifPeek", c.notifPeek)
+        .putBoolean("searchHistory", c.searchHistory)
+        .putBoolean("calculator", c.calculator)
+        .putBoolean("quickTimer", c.quickTimer)
+        .putBoolean("recentApps", c.recentApps)
+        .putBoolean("wallpaperBg", c.wallpaperBg)
+        .putBoolean("wallpaperBlur", c.wallpaperBlur)
         .apply()
 }
 
@@ -512,7 +553,71 @@ fun normalizeUrl(q: String): String =
 /** Counts how often an app is opened so search can put the ones you use first. */
 fun recordLaunch(ctx: Context, key: String) {
     val p = appPrefs(ctx)
-    p.edit().putInt("use_$key", p.getInt("use_$key", 0) + 1).apply()
+    p.edit().putInt("use_$key", p.getInt("use_$key", 0) + 1).putLong("last_$key", System.currentTimeMillis()).apply()
+}
+
+/** The apps opened most recently, newest first. */
+fun recentApps(ctx: Context, apps: List<App>, limit: Int): List<App> {
+    val p = appPrefs(ctx)
+    return apps.map { it to p.getLong("last_${it.key}", 0L) }
+        .filter { it.second > 0L }
+        .sortedByDescending { it.second }
+        .take(limit)
+        .map { it.first }
+}
+
+/** Past searches, newest first. Stored as one line each. */
+fun readSearchHistory(ctx: Context): List<String> =
+    (appPrefs(ctx).getString("searchHistoryList", "") ?: "").split('\n').filter { it.isNotBlank() }
+
+fun addSearchHistory(ctx: Context, query: String) {
+    val q = query.trim().replace('\n', ' ')
+    if (q.length < 2) return
+    val next = (listOf(q) + readSearchHistory(ctx).filter { !it.equals(q, ignoreCase = true) }).take(8)
+    appPrefs(ctx).edit().putString("searchHistoryList", next.joinToString("\n")).apply()
+}
+
+fun clearSearchHistory(ctx: Context) {
+    appPrefs(ctx).edit().remove("searchHistoryList").apply()
+}
+
+/** A tiny calculator for the search bar: + - * / ^ ( ) and decimals. Returns null if the text isn't plain maths. */
+fun calculate(text: String): String? {
+    val s = text.replace('×', '*').replace('÷', '/').replace('x', '*').replace(" ", "").replace(',', '.')
+    if (s.isEmpty() || !s.any { it in "+-*/^" } || !s.all { it.isDigit() || it in "+-*/^().%" }) return null
+    var i = 0
+    fun peek() = if (i < s.length) s[i] else '\u0000'
+    fun number(): Double {
+        val start = i
+        while (peek().isDigit() || peek() == '.') i++
+        if (start == i) throw IllegalArgumentException()
+        return s.substring(start, i).toDouble()
+    }
+    lateinit var expr: () -> Double
+    fun atom(): Double {
+        if (peek() == '-') { i++; return -atom() }
+        if (peek() == '+') { i++; return atom() }
+        var v = if (peek() == '(') { i++; val r = expr(); if (peek() != ')') throw IllegalArgumentException(); i++; r } else number()
+        if (peek() == '%') { i++; v /= 100.0 }
+        return v
+    }
+    fun power(): Double { val b = atom(); return if (peek() == '^') { i++; Math.pow(b, power()) } else b }
+    fun term(): Double {
+        var v = power()
+        while (peek() == '*' || peek() == '/') { val op = s[i++]; val r = power(); v = if (op == '*') v * r else v / r }
+        return v
+    }
+    expr = {
+        var v = term()
+        while (peek() == '+' || peek() == '-') { val op = s[i++]; val r = term(); v = if (op == '+') v + r else v - r }
+        v
+    }
+    return try {
+        val r = expr()
+        if (i != s.length || r.isNaN() || r.isInfinite()) null
+        else if (r == Math.rint(r) && Math.abs(r) < 1e15) r.toLong().toString()
+        else java.math.BigDecimal(r).round(java.math.MathContext(10)).stripTrailingZeros().toPlainString()
+    } catch (_: Exception) { null }
 }
 
 /** Names that start with the query first, then words that start with it, then anywhere; ties go to the most used. */
@@ -535,7 +640,7 @@ fun rankApps(ctx: Context, apps: List<App>, query: String, limit: Int): List<App
 
 // ---------- Backup ----------
 
-private fun skipInBackup(key: String) = key.startsWith("widget_") || key.startsWith("use_") || key == "wp_seed"
+private fun skipInBackup(key: String) = key.startsWith("widget_") || key.startsWith("use_") || key.startsWith("last_") || key == "wp_seed"
 
 /** Every setting and the favorites as one JSON file. Widgets are left out: their ids only mean something on this phone. */
 fun exportSettings(ctx: Context): String {

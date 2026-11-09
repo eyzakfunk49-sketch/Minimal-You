@@ -271,6 +271,10 @@ internal fun Home(
     onOpenWidgets: () -> Unit,
     onWidgetsDrag: (Float) -> Unit,
     onWidgetsEnd: (Float) -> Unit,
+    /** Hold the clock (quick timer). */
+    onClockLong: () -> Unit = {},
+    /** A folder row: name, and whether it was a long press (edit) instead of a tap (open). */
+    onFolder: (String, Boolean) -> Unit = { _, _ -> },
 ) {
     val ctx = LocalContext.current
     val now by rememberNow()
@@ -408,7 +412,7 @@ internal fun Home(
                 }
             }
             if (cfg.showClock) {
-                Box(Modifier.softClick(role = Role.Button) { onSlot(Slot.CLOCK) }) {
+                Box(Modifier.softCombined({ onSlot(Slot.CLOCK) }, if (cfg.quickTimer) onClockLong else null)) {
                     ClockText(
                         p, cfg.clock, now, is24, cfg.homeAlign.horizontal(),
                         // Only swapped in for the built-in sans fonts; a serif, mono or custom font keeps its own look.
@@ -463,7 +467,9 @@ internal fun Home(
         ) {
             // When the list plus the media player won't fit, the spacing between the apps tightens first.
             // Only if that still isn't enough do the names themselves shrink a little.
-            val shown = favorites.take(maxFavorites(cfg))
+            // Folders follow the favorites. They are drawn like apps, using a made-up entry that is never launched.
+            val folderRows = if (cfg.foldersOn) cfg.folders.filter { it.value.isNotEmpty() }.keys.map { App(it, android.content.ComponentName("folder", it)) } else emptyList()
+            val shown = (favorites.take(maxFavorites(cfg)) + folderRows).take(maxFavorites(cfg))
             val rowDp = 48f
             val tightest = 34f
             val perRow = if (shown.isEmpty()) rowDp else maxHeight.value / shown.size
@@ -471,9 +477,11 @@ internal fun Home(
             val fit = (perRow / tightest).coerceIn(0.6f, 1f)
             Column(horizontalAlignment = cfg.homeAlign.horizontal()) {
                 shown.forEach {
+                    val isFolder = it.component.packageName == "folder"
                     AppRow(
-                        it, (30f * fit).sp, p.ink, minHeight = rowH.dp, minWidth = 180.dp, contentAlign = cfg.homeAlign.horizontal(), label = cfg.labels[it.key], onClick = { onLaunch(it) },
-                        onLongClick = { onBuzz(); onAppMenu(it) }, weight = FontWeight.Normal,
+                        it, (30f * fit).sp, p.ink, minHeight = rowH.dp, minWidth = 180.dp, contentAlign = cfg.homeAlign.horizontal(), label = cfg.labels[it.key],
+                        onClick = { if (isFolder) onFolder(it.label, false) else onLaunch(it) },
+                        onLongClick = { onBuzz(); if (isFolder) onFolder(it.label, true) else onAppMenu(it) }, weight = FontWeight.Normal,
                         marker = if (cfg.notifDots && it.component.packageName in NotifState.active) p.accent else null,
                     )
                 }

@@ -63,6 +63,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -80,6 +81,8 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
@@ -157,6 +160,12 @@ internal fun AppMenu(
     onHide: () -> Unit,
     onUninstall: () -> Unit,
     onRename: (() -> Unit)? = null,
+    /** Latest notification (title, text) when "Notification peek" is on and the app has one. */
+    peek: Pair<String, String>? = null,
+    onPeek: () -> Unit = {},
+    /** null = app locking is off; otherwise whether this app is locked. */
+    locked: Boolean? = null,
+    onToggleLock: () -> Unit = {},
 ) {
     Box(
         Modifier
@@ -182,7 +191,21 @@ internal fun AppMenu(
                 modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
             )
             if (onRename != null) MenuItem("Edit name", p.ink, onRename)
+            if (peek != null) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp)
+                        .background(p.bg.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
+                        .softClick(role = Role.Button, onClick = onPeek)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                ) {
+                    if (peek.first.isNotBlank()) BasicText(peek.first, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.ink, 17.sp, FontWeight.Medium))
+                    if (peek.second.isNotBlank()) BasicText(peek.second, maxLines = 3, overflow = TextOverflow.Ellipsis, style = ts(p.muted, 15.sp, FontWeight.Normal))
+                }
+            }
             MenuItem("App info", p.ink, onInfo)
+            if (locked != null) MenuItem(if (locked) "Unlock app" else "Lock app", p.ink, onToggleLock)
             MenuItem("Remove from Home", p.ink, onRemove)
             MenuItem("Hide app", p.ink, onHide)
             MenuItem("Uninstall", p.accent, onUninstall)
@@ -209,6 +232,7 @@ internal enum class SettingsPage(val title: String) {
     GESTURES("Gestures and panels"),
     SEARCH("Search"),
     LOOK("Look and feel"),
+    EXTRAS("Extras"),
 }
 
 internal fun androidx.compose.foundation.lazy.LazyListScope.settingsBlock(content: @Composable ColumnScope.() -> Unit) {
@@ -469,6 +493,10 @@ internal fun AppRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val shownLabel = label ?: app.label
+        if (LocalShowIcons.current && app.component.packageName != "folder") {
+            AppIcon(app.component, with(LocalDensity.current) { size.toDp() } * 0.85f)
+            Spacer(Modifier.width(12.dp))
+        }
         BasicText(
             if (lower) shownLabel.lowercase() else shownLabel,
             maxLines = 1,
@@ -498,7 +526,7 @@ internal fun AppRow(
 }
 
 @Composable
-internal fun HiddenAppsScreen(p: Palette, apps: List<App>, hidden: Set<String>, onToggle: (String) -> Unit, onBack: () -> Unit) {
+internal fun HiddenAppsScreen(p: Palette, apps: List<App>, hidden: Set<String>, onToggle: (String) -> Unit, onBack: () -> Unit, title: String = "Hidden apps") {
     Column(
         Modifier
             .fillMaxSize()
@@ -516,7 +544,7 @@ internal fun HiddenAppsScreen(p: Palette, apps: List<App>, hidden: Set<String>, 
                 .softClick(role = Role.Button, onClick = onBack)
                 .wrapContentHeight(Alignment.CenterVertically),
         )
-        BasicText("Hidden apps", style = ts(p.ink, 28.sp))
+        BasicText(title, style = ts(p.ink, 28.sp))
         LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp)) {
             items(apps, key = { it.key }) { app ->
                 SwitchRow(app.label, app.key in hidden, p) { onToggle(app.key) }
@@ -618,6 +646,246 @@ internal fun RenameOverlay(
                 }
                 BasicText("Save", style = ts(p.accent, 18.sp, FontWeight.Medium), modifier = Modifier.softClick(role = Role.Button) { onSave(value.text.trim()) }.padding(horizontal = 16.dp, vertical = 12.dp))
             }
+        }
+    }
+}
+
+
+// ---------- Extras: icons, folders, timer, tutorial ----------
+
+/** True when small monochrome icons are shown beside app names. */
+internal val LocalShowIcons = compositionLocalOf { false }
+
+private val iconCache = HashMap<String, androidx.compose.ui.graphics.ImageBitmap>()
+
+/** A small grayscale app icon, loaded off the main thread and remembered. */
+@Composable
+internal fun AppIcon(component: android.content.ComponentName, size: androidx.compose.ui.unit.Dp) {
+    val ctx = LocalContext.current
+    val key = component.flattenToString()
+    var bmp by remember(key) { mutableStateOf(iconCache[key]) }
+    LaunchedEffect(key) {
+        if (bmp == null) {
+            bmp = withContext(Dispatchers.Default) {
+                try {
+                    val d = ctx.packageManager.getActivityIcon(component)
+                    val b = android.graphics.Bitmap.createBitmap(96, 96, android.graphics.Bitmap.Config.ARGB_8888)
+                    d.setBounds(0, 0, 96, 96)
+                    d.draw(android.graphics.Canvas(b))
+                    b.asImageBitmap()
+                } catch (_: Exception) { null }
+            }?.also { iconCache[key] = it }
+        }
+    }
+    Box(Modifier.size(size)) {
+        val b = bmp
+        if (b != null) {
+            androidx.compose.foundation.Image(
+                bitmap = b,
+                contentDescription = null,
+                colorFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(0f) }),
+                alpha = 0.85f,
+                modifier = Modifier.fillMaxSize().clip(androidx.compose.foundation.shape.CircleShape),
+            )
+        }
+    }
+}
+
+/** The apps in a folder, as a card at the bottom of the screen. */
+@Composable
+internal fun FolderSheet(p: Palette, name: String, apps: List<App>, onLaunch: (App) -> Unit, onEdit: () -> Unit, onDismiss: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.5f))
+            .pointerInput(Unit) { detectTapGestures { onDismiss() } }
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
+            .padding(horizontal = 32.dp, vertical = 24.dp),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(p.pill, RoundedCornerShape(28.dp))
+                .pointerInput(Unit) { detectTapGestures { } }
+                .padding(horizontal = 24.dp, vertical = 12.dp),
+        ) {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                BasicText(name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.muted, 14.sp, FontWeight.Medium, 0.5.sp), modifier = Modifier.weight(1f))
+                BasicText("Edit", style = ts(p.accent, 15.sp, FontWeight.Medium), modifier = Modifier.softClick(role = Role.Button, onClick = onEdit).padding(8.dp))
+            }
+            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                apps.forEach { app ->
+                    AppRow(app, 24.sp, p.ink, onClick = { onLaunch(app) }, fullWidth = true, weight = FontWeight.Normal)
+                }
+            }
+        }
+    }
+}
+
+/** Create or change a folder: a name and the apps in it. */
+@Composable
+internal fun FolderEditor(
+    p: Palette,
+    initialName: String?,
+    apps: List<App>,
+    initialKeys: List<String>,
+    onSave: (String, List<String>) -> Unit,
+    onDelete: (() -> Unit)?,
+    onCancel: () -> Unit,
+) {
+    var name by remember { mutableStateOf(initialName ?: "") }
+    val chosen = remember { mutableStateListOf<String>().apply { addAll(initialKeys) } }
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(p.bg)
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
+            .imePadding()
+            .padding(horizontal = 32.dp)
+            .pointerInput(Unit) { detectTapGestures { } },
+    ) {
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            BasicText(
+                "Cancel", style = ts(p.accent, 16.sp, FontWeight.Medium),
+                modifier = Modifier.heightIn(min = 52.dp).softClick(role = Role.Button, onClick = onCancel).wrapContentHeight(Alignment.CenterVertically),
+            )
+            Spacer(Modifier.weight(1f))
+            val ok = name.isNotBlank() && chosen.isNotEmpty()
+            BasicText(
+                "Save", style = ts(if (ok) p.accent else p.muted.copy(alpha = 0.5f), 16.sp, FontWeight.Medium),
+                modifier = Modifier.heightIn(min = 52.dp).then(if (ok) Modifier.softClick(role = Role.Button) { onSave(name.trim(), chosen.toList()) } else Modifier).wrapContentHeight(Alignment.CenterVertically),
+            )
+        }
+        BasicText(if (initialName == null) "New folder" else "Edit folder", style = ts(p.ink, 28.sp))
+        Spacer(Modifier.height(12.dp))
+        Pill(p) {
+            BasicTextField(
+                value = name,
+                onValueChange = { name = it },
+                singleLine = true,
+                textStyle = ts(p.ink, 18.sp, FontWeight.Normal),
+                cursorBrush = SolidColor(p.accent),
+                modifier = Modifier.fillMaxWidth(),
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (name.isEmpty()) BasicText("Folder name", style = ts(p.muted, 18.sp, FontWeight.Normal))
+                        inner()
+                    }
+                },
+            )
+        }
+        LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp), modifier = Modifier.weight(1f)) {
+            items(apps, key = { it.key }) { app ->
+                SwitchRow(app.label, app.key in chosen, p) { if (app.key in chosen) chosen.remove(app.key) else chosen.add(app.key) }
+            }
+            if (onDelete != null) {
+                item {
+                    BasicText(
+                        "Delete folder", style = ts(p.accent, 18.sp, FontWeight.Medium),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).softClick(role = Role.Button, onClick = onDelete).wrapContentHeight(Alignment.CenterVertically),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Preset timers, started in the clock app without opening it. */
+@Composable
+internal fun TimerSheet(p: Palette, onStart: (Int) -> Unit, onDismiss: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.5f))
+            .pointerInput(Unit) { detectTapGestures { onDismiss() } }
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
+            .padding(horizontal = 32.dp, vertical = 24.dp),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(p.pill, RoundedCornerShape(28.dp))
+                .pointerInput(Unit) { detectTapGestures { } }
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+        ) {
+            BasicText("Start a timer", style = ts(p.muted, 14.sp, FontWeight.Medium, 0.5.sp))
+            Spacer(Modifier.height(12.dp))
+            listOf(listOf(1, 5, 10), listOf(15, 30, 60)).forEach { row ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    row.forEach { m ->
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .height(56.dp)
+                                .background(p.bg.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
+                                .softClick(role = Role.Button) { onStart(m) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            BasicText(if (m == 60) "1 hr" else "$m min", style = ts(p.ink, 20.sp, FontWeight.Normal))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A short walkthrough for a fresh install. Always skippable. */
+@Composable
+internal fun Tutorial(p: Palette, onDone: () -> Unit) {
+    val steps = listOf(
+        "Welcome to MinimalYou" to "A calm home screen made of words. This takes about 20 seconds, and you can skip it.",
+        "Open apps" to "Tap a name on Home to open it. Touch and hold a name to edit it, lock it, hide it or remove it.",
+        "All apps" to "Swipe up from the bottom for the full list, or from the right if you changed that in Settings. Slide along the letters on the edge to jump.",
+        "Search" to "Tap the search bar. It finds apps, contacts, files and the web, and does sums: try 12*7.",
+        "Widgets and settings" to "Swipe right from Home for widgets. Double-tap an empty spot to lock the screen, or touch and hold it to open Settings, where every feature has its own switch.",
+    )
+    var i by remember { mutableStateOf(0) }
+    val last = i == steps.lastIndex
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(p.bg)
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
+            .pointerInput(Unit) { detectTapGestures { } }
+            .padding(horizontal = 32.dp, vertical = 16.dp),
+    ) {
+        Row(Modifier.fillMaxWidth()) {
+            Spacer(Modifier.weight(1f))
+            BasicText(
+                "Skip", style = ts(p.muted, 16.sp, FontWeight.Medium),
+                modifier = Modifier.heightIn(min = 52.dp).softClick(role = Role.Button, onClick = onDone).padding(horizontal = 8.dp).wrapContentHeight(Alignment.CenterVertically),
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        AnimatedContent(
+            targetState = i,
+            transitionSpec = { (fadeIn(tw(260)) + slideInHorizontally(tw(300, easing = EmphasizedDecel)) { it / 8 }) togetherWith fadeOut(tw(120)) },
+            label = "tutorialStep",
+        ) { step ->
+            Column {
+                BasicText(steps[step].first, style = ts(p.ink, 38.sp, FontWeight.Light, (-1).sp, 44.sp))
+                Spacer(Modifier.height(16.dp))
+                BasicText(steps[step].second, style = ts(p.muted, 18.sp, FontWeight.Normal, lineHeight = 26.sp))
+            }
+        }
+        Spacer(Modifier.weight(1f))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                steps.indices.forEach { n ->
+                    Box(Modifier.size(8.dp).background(if (n == i) p.accent else p.muted.copy(alpha = 0.35f), CircleShape))
+                }
+            }
+            BasicText(
+                if (last) "Get started" else "Next",
+                style = ts(p.bg, 17.sp, FontWeight.Medium),
+                modifier = Modifier
+                    .background(p.accent, RoundedCornerShape(28.dp))
+                    .softClick(role = Role.Button) { if (last) onDone() else i++ }
+                    .padding(horizontal = 28.dp, vertical = 14.dp),
+            )
         }
     }
 }

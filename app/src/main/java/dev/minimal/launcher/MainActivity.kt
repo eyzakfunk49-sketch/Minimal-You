@@ -9,6 +9,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import androidx.compose.ui.graphics.toArgb
 import android.os.Environment
 import android.text.format.DateFormat
 import android.widget.Toast
@@ -190,7 +191,58 @@ internal class RootTracker {
 
 internal var moveEdgeExclusion: (Float) -> Unit = {}
 
+/** Kept in step with Settings so [openApp] knows which apps need a fingerprint first. */
+internal var appLockOn = false
+internal var lockedKeys: Set<String> = emptySet()
+
+/** Asks for a fingerprint (or the screen lock) and runs [onOk] only if it succeeds. */
+internal fun authenticate(ctx: Context, title: String, onOk: () -> Unit) {
+    val auth = android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_STRONG or
+        android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+    val bm = ctx.getSystemService(android.hardware.biometrics.BiometricManager::class.java)
+    if (bm == null || bm.canAuthenticate(auth) != android.hardware.biometrics.BiometricManager.BIOMETRIC_SUCCESS) {
+        Toast.makeText(ctx, "Set up a fingerprint or screen lock in system settings to use app locking", Toast.LENGTH_LONG).show()
+        return
+    }
+    try {
+        android.hardware.biometrics.BiometricPrompt.Builder(ctx)
+            .setTitle(title)
+            .setAllowedAuthenticators(auth)
+            .build()
+            .authenticate(
+                android.os.CancellationSignal(), ctx.mainExecutor,
+                object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                    override fun onAuthenticationSucceeded(result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult?) { onOk() }
+                },
+            )
+    } catch (_: Exception) {
+        Toast.makeText(ctx, "Couldn't ask for your fingerprint", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/** Starts a timer in the clock app without opening it. */
+internal fun startTimer(ctx: Context, minutes: Int) {
+    try {
+        ctx.startActivity(
+            Intent(android.provider.AlarmClock.ACTION_SET_TIMER)
+                .putExtra(android.provider.AlarmClock.EXTRA_LENGTH, minutes * 60)
+                .putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+        Toast.makeText(ctx, "Timer set for ${if (minutes == 60) "1 hour" else "$minutes min"}", Toast.LENGTH_SHORT).show()
+    } catch (_: Exception) {
+        Toast.makeText(ctx, "No clock app can start a timer", Toast.LENGTH_SHORT).show()
+    }
+}
+
+internal const val NEW_FOLDER = "\u0000new"
+
 internal fun openApp(ctx: Context, app: App) {
+    if (appLockOn && app.key in lockedKeys) authenticate(ctx, "Unlock ${app.label}") { launchApp(ctx, app) }
+    else launchApp(ctx, app)
+}
+
+private fun launchApp(ctx: Context, app: App) {
     recordLaunch(ctx, app.key)
     val intent = Intent(Intent.ACTION_MAIN)
         .addCategory(Intent.CATEGORY_LAUNCHER)
@@ -362,6 +414,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     val visibleApps = remember(apps, cfg.hidden) { apps.filter { it.key !in cfg.hidden } }
     var hiddenOpen by remember { mutableStateOf(false) }
 
+    val recentList = remember(visibleApps, drawerOpen) { recentApps(ctx, visibleApps, 4) }
     val updateCfg: (Config) -> Unit = { next ->
         cfg = next
         saveConfig(ctx, next)
@@ -386,6 +439,21 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             controller.show(WindowInsetsCompat.Type.statusBars())
         }
     }
+    // Show the system wallpaper behind Home (optionally blurred). The window itself has to be see-through for that.
+    LaunchedEffect(cfg.wallpaperBg, cfg.wallpaperBlur, p.bg) {
+        var c: Context? = view.context
+        while (c is android.content.ContextWrapper && c !is Activity) c = c.baseContext
+        val w = (c as? Activity)?.window ?: return@LaunchedEffect
+        if (cfg.wallpaperBg) w.addFlags(android.view.WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER)
+        else w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER)
+        w.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(if (cfg.wallpaperBg) 0 else p.bg.toArgb()))
+        val blur = cfg.wallpaperBg && cfg.wallpaperBlur
+        if (blur) w.addFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+        else w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+        val a = w.attributes
+        a.blurBehindRadius = if (blur) 60 else 0
+        w.attributes = a
+    }
     // Lowest priority: on Home, back does nothing, which also stops Android's "swipe back to leave the app" shrink animation.
     BackHandler(enabled = true) { }
     BackHandler(enabled = menuApp != null) { menuApp = null }
@@ -395,8 +463,24 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     BackHandler(enabled = settingsOpen) { settingsOpen = false }
     BackHandler(enabled = hiddenOpen) { hiddenOpen = false }
     var renameApp by remember { mutableStateOf<App?>(null) }
+    // Extras
+    var openFolder by remember { mutableStateOf<String?>(null) }
+    var folderEdit by remember { mutableStateOf<String?>(null) } // a folder's name, or NEW_FOLDER for a new one
+    var timerOpen by remember { mutableStateOf(false) }
+    var lockPickerOpen by remember { mutableStateOf(false) }
+    val fresh = remember {
+        try { val pi = ctx.packageManager.getPackageInfo(ctx.packageName, 0); pi.firstInstallTime == pi.lastUpdateTime } catch (_: Exception) { false }
+    }
+    var tutorialOpen by remember { mutableStateOf(fresh && !appPrefs(ctx).getBoolean("tutorialDone", false)) }
+    val finishTutorial = { tutorialOpen = false; appPrefs(ctx).edit().putBoolean("tutorialDone", true).apply() }
+    SideEffect { appLockOn = cfg.appLock; lockedKeys = cfg.locked }
     BackHandler(enabled = pickSlot != null) { pickSlot = null }
-    BackHandler(enabled = renameApp != null) { renameApp = null } // registered last = handled first
+    BackHandler(enabled = openFolder != null) { openFolder = null }
+    BackHandler(enabled = timerOpen) { timerOpen = false }
+    BackHandler(enabled = lockPickerOpen) { lockPickerOpen = false }
+    BackHandler(enabled = folderEdit != null) { folderEdit = null }
+    BackHandler(enabled = renameApp != null) { renameApp = null }
+    BackHandler(enabled = tutorialOpen) { finishTutorial() } // registered last = handled first
 
     // Weather: refresh every 30 minutes (every minute until the first success).
     LaunchedEffect(cfg.weatherOn, cfg.weatherLocation, cfg.city, cfg.lat, cfg.lon, cfg.fahrenheit) {
@@ -458,7 +542,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
         else Toast.makeText(ctx, "Pick a ${slot.label.lowercase()} app in Settings", Toast.LENGTH_SHORT).show()
     }
 
-    CompositionLocalProvider(LocalFont provides cfg.fontFamily(), LocalLowercase provides cfg.lowercaseApps) {
+    CompositionLocalProvider(LocalFont provides cfg.fontFamily(), LocalLowercase provides cfg.lowercaseApps, LocalShowIcons provides cfg.iconsOn) {
         val view = LocalView.current
         SideEffect { launchView = view }
         // Android lets an app claim at most ~200dp of each screen edge from the system back gesture.
@@ -506,7 +590,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     )
                     scaleX = zoom; scaleY = zoom; alpha = fade
                 }
-                .background(p.bg)
+                .background(if (cfg.wallpaperBg) p.bg.copy(alpha = 0.55f) else p.bg)
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         val d = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -556,6 +640,8 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                 onSlot = openSlot,
                 onBuzz = buzz,
                 onOpenWidgets = { widgetsOpen = true },
+                onClockLong = { buzz(); timerOpen = true },
+                onFolder = { name, long -> buzz(); if (long) folderEdit = name else openFolder = name },
                 onWidgetsDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { widgetsP.snapTo(f.coerceIn(0f, 1f)) } },
                 onWidgetsEnd = { v ->
                     val open = if (v > 150f) true else if (v < -150f) false else widgetsP.value > 0.1f
@@ -595,6 +681,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                         active = drawerVisible,
                         progress = { drawerP.value },
                         onLaunch = { openApp(ctx, it) },
+                        recent = if (cfg.recentApps) recentList else emptyList(),
                         onTogglePin = togglePin,
                         onClose = { drawerOpen = false },
                         onDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { drawerP.snapTo(f.coerceIn(0f, 1f)) } },
@@ -641,6 +728,14 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     AppMenu(
                         p, app,
                         onRename = { menuApp = null; renameApp = app },
+                        peek = if (cfg.notifPeek) NotifState.latest[pkg] else null,
+                        onPeek = { menuApp = null; openApp(ctx, app) },
+                        locked = if (cfg.appLock) app.key in cfg.locked else null,
+                        onToggleLock = {
+                            menuApp = null
+                            if (app.key in cfg.locked) authenticate(ctx, "Unlock ${app.label}") { updateCfg(cfg.copy(locked = cfg.locked - app.key)) }
+                            else { updateCfg(cfg.copy(locked = cfg.locked + app.key)); Toast.makeText(ctx, "${app.label} is locked", Toast.LENGTH_SHORT).show() }
+                        },
                         onDismiss = { menuApp = null },
                         onInfo = {
                             menuApp = null
@@ -703,7 +798,10 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     favorites = favorites, apps = apps, onSetFavs = setFavs,
                     onPickSlot = { pickSlot = it },
                     onOpenHidden = { hiddenOpen = true },
-                    coveredByScreen = hiddenOpen || pickSlot != null,
+                    coveredByScreen = hiddenOpen || pickSlot != null || lockPickerOpen || folderEdit != null,
+                    onEditFolder = { folderEdit = it ?: NEW_FOLDER },
+                    onPickLocked = { lockPickerOpen = true },
+                    onShowTutorial = { settingsOpen = false; tutorialOpen = true },
                     onBack = { settingsOpen = false },
                 )
             }
@@ -726,6 +824,40 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     )
                 }
             }
+            AnimatedVisibility(visible = lockPickerOpen, enter = pushEnter(), exit = pushExit()) {
+                HiddenAppsScreen(
+                    p, apps, cfg.locked,
+                    onToggle = { key ->
+                        if (key in cfg.locked) authenticate(ctx, "Unlock this app") { updateCfg(cfg.copy(locked = cfg.locked - key)) }
+                        else updateCfg(cfg.copy(locked = cfg.locked + key))
+                    },
+                    onBack = { lockPickerOpen = false },
+                    title = "Locked apps",
+                )
+            }
+            if (folderEdit != null) {
+                val editing = folderEdit!!.takeIf { it != NEW_FOLDER }
+                FolderEditor(
+                    p, editing, visibleApps, editing?.let { cfg.folders[it] } ?: emptyList(),
+                    onSave = { n, keys ->
+                        updateCfg(cfg.copy(folders = cfg.folders.filterKeys { it != editing && it != n } + (n to keys)))
+                        folderEdit = null
+                    },
+                    onDelete = editing?.let { { updateCfg(cfg.copy(folders = cfg.folders - it)); folderEdit = null } },
+                    onCancel = { folderEdit = null },
+                )
+            }
+            openFolder?.let { name ->
+                val byKey = apps.associateBy { it.key }
+                FolderSheet(
+                    p, name, (cfg.folders[name] ?: emptyList()).mapNotNull { byKey[it] },
+                    onLaunch = { openFolder = null; openApp(ctx, it) },
+                    onEdit = { openFolder = null; folderEdit = name },
+                    onDismiss = { openFolder = null },
+                )
+            }
+            if (timerOpen) TimerSheet(p, onStart = { timerOpen = false; startTimer(ctx, it) }, onDismiss = { timerOpen = false })
+            if (tutorialOpen) Tutorial(p, onDone = finishTutorial)
         }
     }
 }
