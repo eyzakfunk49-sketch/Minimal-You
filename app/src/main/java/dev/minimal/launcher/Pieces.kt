@@ -525,17 +525,9 @@ internal fun AppRow(
             AppIcon(app.component, with(LocalDensity.current) { size.toDp() } * 0.85f)
             Spacer(Modifier.width(12.dp))
         }
-        BasicText(
-            if (lower) shownLabel.lowercase() else shownLabel,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = ts(color, size, weight),
-            onTextLayout = { layout ->
-                val letterMiddle = layout.firstBaseline - sizePx * 0.32f
-                dotShift = letterMiddle - layout.size.height / 2f
-            },
-            modifier = Modifier.weight(1f, fill = false).onGloballyPositioned { textCoords = it },
-        )
+        // Right-aligned lists would push anything after the name off screen, so there the dot and arrow hang before it.
+        val hangLeft = contentAlign == Alignment.End
+        val hangers: @Composable () -> Unit = {
         if (marker != null) {
             // The dot takes no room in the row: it hangs just after the name, so the name itself stays exactly
             // where it would be without a dot (important when the list is centered).
@@ -544,7 +536,7 @@ internal fun AppRow(
                     .layout { measurable, constraints ->
                         val placeable = measurable.measure(constraints)
                         val gap = 12.dp.roundToPx()
-                        layout(0, placeable.height) { placeable.place(gap, 0) }
+                        layout(0, placeable.height) { placeable.place(if (hangLeft) -(gap + placeable.width) else gap, 0) }
                     }
                     .size(8.dp)
                     .offset { IntOffset(0, dotShift.roundToInt()) },
@@ -558,7 +550,7 @@ internal fun AppRow(
                     .layout { measurable, constraints ->
                         val placeable = measurable.measure(constraints)
                         val gap = 12.dp.roundToPx()
-                        layout(0, placeable.height) { placeable.place(gap, 0) }
+                        layout(0, placeable.height) { placeable.place(if (hangLeft) -(gap + placeable.width) else gap, 0) }
                     }
                     .size(16.dp)
                     .offset { IntOffset(0, dotShift.roundToInt()) }
@@ -573,6 +565,20 @@ internal fun AppRow(
                 drawLine(c, Offset(w * 0.5f, h * 0.7f), Offset(w * 0.85f, h * 0.35f), strokeWidth = sw, cap = StrokeCap.Round)
             }
         }
+        }
+        if (hangLeft) hangers()
+        BasicText(
+            if (lower) shownLabel.lowercase() else shownLabel,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = ts(color, size, weight),
+            onTextLayout = { layout ->
+                val letterMiddle = layout.firstBaseline - sizePx * 0.32f
+                dotShift = letterMiddle - layout.size.height / 2f
+            },
+            modifier = Modifier.weight(1f, fill = false).onGloballyPositioned { textCoords = it },
+        )
+        if (!hangLeft) hangers()
     }
 }
 
