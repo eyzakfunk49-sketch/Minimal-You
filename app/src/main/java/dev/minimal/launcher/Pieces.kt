@@ -314,10 +314,11 @@ internal fun SwitchRow(label: String, checked: Boolean, p: Palette, onChange: (B
         Modifier
             .fillMaxWidth()
             .heightIn(min = 52.dp)
-            .toggleable(value = checked, role = Role.Switch, onValueChange = onChange),
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onChange)
+            .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        BasicText(label, style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
+        BasicText(label, style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f).padding(end = 20.dp))
         val t by animateFloatAsState(if (checked) 1f else 0f, sp(0.8f, 700f), label = "switch")
         Canvas(Modifier.size(width = 44.dp, height = 26.dp)) {
             val r = size.height / 2f
