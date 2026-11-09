@@ -281,6 +281,28 @@ internal fun rememberMedia(enabled: Boolean, resumes: Int): MediaUi {
     return ui
 }
 
+/** Opens the app that owns the playing session: its own "now playing" screen if it gave one, else its launcher screen. */
+internal fun openMediaApp(ctx: android.content.Context, c: MediaController) {
+    fun launcherIntent() {
+        try {
+            ctx.packageManager.getLaunchIntentForPackage(c.packageName)
+                ?.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                ?.let { ctx.startActivity(it) }
+        } catch (_: Exception) {}
+    }
+    val pi = c.sessionActivity
+    if (pi == null) { launcherIntent(); return }
+    try {
+        val opts = android.app.ActivityOptions.makeBasic()
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
+            opts.setPendingIntentBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+        }
+        pi.send(ctx, 0, null, null, null, null, opts.toBundle())
+    } catch (_: Exception) {
+        launcherIntent()
+    }
+}
+
 @Composable
 internal fun MediaPlayerCard(p: Palette, ui: MediaUi, modifier: Modifier = Modifier) {
     val transport = ui.controller?.transportControls
@@ -300,6 +322,7 @@ internal fun MediaPlayerCard(p: Palette, ui: MediaUi, modifier: Modifier = Modif
     var width by remember { mutableStateOf(1f) }
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
+    val openOwner = { ui.controller?.let { openMediaApp(ctx, it) }; Unit }
 
     Column(
         modifier
@@ -314,10 +337,11 @@ internal fun MediaPlayerCard(p: Palette, ui: MediaUi, modifier: Modifier = Modif
                     tracker.addPosition(down.uptimeMillis, down.position)
                     var dragging = false
                     var total = 0f
+                    var tapped = false
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!change.pressed) break
+                        if (!change.pressed) { tapped = !dragging && !change.isConsumed; break }
                         if (!dragging && change.isConsumed) break // the seek bar or a button already took this touch
                         tracker.addPosition(change.uptimeMillis, change.position)
                         val dx = change.positionChange().x
@@ -328,6 +352,7 @@ internal fun MediaPlayerCard(p: Palette, ui: MediaUi, modifier: Modifier = Modif
                             swipeX += dx
                         }
                     }
+                    if (tapped) openOwner()
                     if (dragging) {
                         val v = tracker.calculateVelocity().x
                         val away = kotlin.math.abs(swipeX) > width * 0.35f || kotlin.math.abs(v) > 1800f
@@ -344,23 +369,6 @@ internal fun MediaPlayerCard(p: Palette, ui: MediaUi, modifier: Modifier = Modif
                 alpha = 1f - (kotlin.math.abs(swipeX) / width).coerceIn(0f, 1f) * 0.85f
             }
             .clip(RoundedCornerShape(32.dp))
-            .clickable {
-                // Open the app that owns the session: its own "now playing" screen if it gave one, else its launcher activity.
-                val c = ui.controller ?: return@clickable
-                try {
-                    val pi = c.sessionActivity
-                    if (pi != null) pi.send()
-                    else ctx.packageManager.getLaunchIntentForPackage(c.packageName)
-                        ?.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                        ?.let { ctx.startActivity(it) }
-                } catch (_: Exception) {
-                    try {
-                        ctx.packageManager.getLaunchIntentForPackage(c.packageName)
-                            ?.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                            ?.let { ctx.startActivity(it) }
-                    } catch (_: Exception) {}
-                }
-            }
             .background(p.pill, RoundedCornerShape(32.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {

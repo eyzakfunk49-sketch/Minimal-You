@@ -386,6 +386,8 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             controller.show(WindowInsetsCompat.Type.statusBars())
         }
     }
+    // Lowest priority: on Home, back does nothing, which also stops Android's "swipe back to leave the app" shrink animation.
+    BackHandler(enabled = true) { }
     BackHandler(enabled = menuApp != null) { menuApp = null }
     BackHandler(enabled = drawerOpen) { drawerOpen = false }
     BackHandler(enabled = widgetsOpen) { widgetsOpen = false }
