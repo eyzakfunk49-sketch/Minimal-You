@@ -19,15 +19,22 @@ object NotifState {
  * "Notification peek" is switched on, kept in memory, and never saved or sent anywhere.
  */
 class NotificationDotService : NotificationListenerService() {
-    override fun onListenerConnected() { refresh() }
+    companion object {
+        private var instance: NotificationDotService? = null
 
-    override fun onListenerDisconnected() { NotifState.active = emptySet(); NotifState.latest = emptyMap() }
+        /** Re-reads the current notifications, e.g. right after Notification peek is switched on. */
+        fun refreshNow() { instance?.refresh() }
+    }
+
+    override fun onListenerConnected() { instance = this; refresh() }
+
+    override fun onListenerDisconnected() { instance = null; NotifState.active = emptySet(); NotifState.latest = emptyMap() }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) { refresh() }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) { refresh() }
 
-    private fun refresh() {
+    internal fun refresh() {
         val list = try { activeNotifications } catch (e: Exception) { null } ?: return
         val shown = list.filter { !it.isOngoing && (it.notification.flags and Notification.FLAG_GROUP_SUMMARY) == 0 }
         NotifState.active = shown.map { it.packageName }.toSet()

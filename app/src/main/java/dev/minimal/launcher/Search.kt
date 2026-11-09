@@ -272,7 +272,7 @@ internal fun SearchScreen(
                 },
             )
         }
-        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 24.dp)) {
+        LazyColumn(Modifier.fadeEdges(listState), state = listState, contentPadding = PaddingValues(bottom = 24.dp)) {
             if (q.isEmpty()) {
                 item {
                     val sources = listOfNotNull(

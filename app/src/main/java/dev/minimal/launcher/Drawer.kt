@@ -277,7 +277,7 @@ internal fun Drawer(
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
-                Modifier.fillMaxSize().fadeEdges(),
+                Modifier.fillMaxSize().fadeEdges(listState),
                 state = listState,
                 contentPadding = PaddingValues(end = 28.dp, bottom = 8.dp),
             ) {
@@ -385,21 +385,3 @@ internal fun Drawer(
 }
 
 
-/** Softly fades the top and bottom edge of a scrolling list instead of cutting it off. */
-private fun Modifier.fadeEdges(length: androidx.compose.ui.unit.Dp = 28.dp): Modifier = this
-    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-    .drawWithContent {
-        drawContent()
-        val len = length.toPx().coerceAtMost(size.height / 3f)
-        drawRect(
-            Brush.verticalGradient(listOf(Color.Transparent, Color.Black), startY = 0f, endY = len),
-            size = Size(size.width, len),
-            blendMode = BlendMode.DstIn,
-        )
-        drawRect(
-            Brush.verticalGradient(listOf(Color.Black, Color.Transparent), startY = size.height - len, endY = size.height),
-            topLeft = Offset(0f, size.height - len),
-            size = Size(size.width, len),
-            blendMode = BlendMode.DstIn,
-        )
-    }

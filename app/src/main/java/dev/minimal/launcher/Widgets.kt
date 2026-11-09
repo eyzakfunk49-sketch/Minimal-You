@@ -526,7 +526,7 @@ internal fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> U
                     modifier = Modifier.padding(top = 8.dp),
                 )
             }
-            LazyColumn(state = listState, userScrollEnabled = !innerScrolling, contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp)) {
+            LazyColumn(Modifier.fadeEdges(listState), state = listState, userScrollEnabled = !innerScrolling, contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp)) {
                 items(ids, key = { it }) { id ->
                     val info = manager.getAppWidgetInfo(id)
                     if (info == null) {
@@ -673,7 +673,8 @@ internal fun WidgetsScreen(p: Palette, onClose: () -> Unit, onDrag: (Float) -> U
                         }
                     }
                 }
-                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(top = 12.dp, bottom = 12.dp)) {
+                val pickList = rememberLazyListState()
+                LazyColumn(Modifier.weight(1f).fadeEdges(pickList), state = pickList, contentPadding = PaddingValues(top = 12.dp, bottom = 12.dp)) {
                     items(visible, key = { it.first }) { (pkg, appLabel, list) ->
                         // Every app is a drop-down, even with a single widget.
                         val open = expanded == pkg || (q.isNotEmpty() && !appLabel.contains(q, ignoreCase = true))

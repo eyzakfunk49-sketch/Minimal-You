@@ -82,6 +82,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -234,7 +235,6 @@ internal enum class SettingsPage(val title: String) {
     GESTURES("Gestures and panels"),
     SEARCH("Search"),
     LOOK("Look and feel"),
-    ORGANIZE("App organization"),
     EXTRAS("Extras"),
 }
 
@@ -573,7 +573,8 @@ internal fun HiddenAppsScreen(p: Palette, apps: List<App>, hidden: Set<String>, 
                 .wrapContentHeight(Alignment.CenterVertically),
         )
         BasicText(title, style = ts(p.ink, 28.sp))
-        LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp)) {
+        val listState = rememberLazyListState()
+        LazyColumn(Modifier.fadeEdges(listState), state = listState, contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp)) {
             items(apps, key = { it.key }) { app ->
                 SwitchRow(app.label, app.key in hidden, p) { onToggle(app.key) }
             }
@@ -601,7 +602,8 @@ internal fun AppPicker(p: Palette, slot: Slot, apps: List<App>, onPick: (App?) -
                 .wrapContentHeight(Alignment.CenterVertically),
         )
         BasicText("Open ${slot.label.lowercase()} with", style = ts(p.ink, 28.sp))
-        LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp)) {
+        val listState = rememberLazyListState()
+        LazyColumn(Modifier.fadeEdges(listState), state = listState, contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp)) {
             item {
                 BasicText(
                     "Default",
@@ -742,7 +744,8 @@ internal fun FolderSheet(p: Palette, name: String, apps: List<App>, onLaunch: (A
                 BasicText(name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.muted, 14.sp, FontWeight.Medium, 0.5.sp), modifier = Modifier.weight(1f))
                 BasicText("Edit", style = ts(p.accent, 15.sp, FontWeight.Medium), modifier = Modifier.softClick(role = Role.Button, onClick = onEdit).padding(8.dp))
             }
-            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+            val sheetScroll = rememberScrollState()
+            Column(Modifier.heightIn(max = 420.dp).fadeEdges(sheetScroll).verticalScroll(sheetScroll)) {
                 apps.forEach { app ->
                     AppRow(app, 24.sp, p.ink, onClick = { onLaunch(app) }, fullWidth = true, weight = FontWeight.Normal)
                 }
@@ -788,30 +791,30 @@ internal fun FolderEditor(
         }
         BasicText(if (initialName == null) "New folder" else "Edit folder", style = ts(p.ink, 28.sp))
         Spacer(Modifier.height(20.dp))
-        // The name is a plain underlined field, so it can't be mistaken for the search bar at the bottom.
-        BasicText("NAME", style = ts(p.muted, 12.sp, FontWeight.Medium, 1.sp))
-        BasicTextField(
-            value = name,
-            onValueChange = { name = it },
-            singleLine = true,
-            textStyle = ts(p.ink, 30.sp, FontWeight.Light),
-            cursorBrush = SolidColor(p.accent),
-            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-            decorationBox = { inner ->
-                Box(contentAlignment = Alignment.CenterStart) {
-                    if (name.isEmpty()) BasicText("Work, Social, Games...", style = ts(p.muted.copy(alpha = 0.6f), 30.sp, FontWeight.Light))
-                    inner()
-                }
-            },
-        )
-        Box(Modifier.fillMaxWidth().padding(top = 6.dp).height(2.dp).background(p.accent.copy(alpha = 0.5f), RoundedCornerShape(1.dp)))
-        Spacer(Modifier.height(20.dp))
+        Pill(p) {
+            BasicTextField(
+                value = name,
+                onValueChange = { name = it },
+                singleLine = true,
+                textStyle = ts(p.ink, 18.sp, FontWeight.Normal),
+                cursorBrush = SolidColor(p.accent),
+                modifier = Modifier.fillMaxWidth(),
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (name.isEmpty()) BasicText("Folder name", style = ts(p.muted, 18.sp, FontWeight.Normal))
+                        inner()
+                    }
+                },
+            )
+        }
+        Spacer(Modifier.height(24.dp))
         BasicText(
             "APPS  ·  " + if (chosen.isEmpty()) "pick at least one" else "${chosen.size} selected",
             style = ts(p.muted, 12.sp, FontWeight.Medium, 1.sp),
         )
         val visible = remember(apps, query) { if (query.isBlank()) apps else apps.filter { it.label.contains(query.trim(), ignoreCase = true) } }
-        LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 12.dp), modifier = Modifier.weight(1f)) {
+        val editorList = rememberLazyListState()
+        LazyColumn(state = editorList, contentPadding = PaddingValues(top = 8.dp, bottom = 12.dp), modifier = Modifier.weight(1f).fadeEdges(editorList)) {
             items(visible, key = { it.key }) { app ->
                 SwitchRow(app.label, app.key in chosen, p) { if (app.key in chosen) chosen.remove(app.key) else chosen.add(app.key) }
             }
@@ -944,3 +947,40 @@ internal fun Tutorial(p: Palette, onDone: () -> Unit) {
         }
     }
 }
+
+
+/**
+ * Softly fades the top and bottom of a scrolling list instead of cutting it off. Each edge only fades while the
+ * list can actually scroll that way, so a short list is left alone.
+ */
+internal fun Modifier.fadeEdges(
+    canTop: () -> Boolean,
+    canBottom: () -> Boolean,
+    length: androidx.compose.ui.unit.Dp = 24.dp,
+): Modifier = this
+    .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val len = length.toPx().coerceAtMost(size.height / 3f)
+        if (canTop()) {
+            drawRect(
+                androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.Transparent, Color.Black), startY = 0f, endY = len),
+                size = androidx.compose.ui.geometry.Size(size.width, len),
+                blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
+            )
+        }
+        if (canBottom()) {
+            drawRect(
+                androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.Black, Color.Transparent), startY = size.height - len, endY = size.height),
+                topLeft = Offset(0f, size.height - len),
+                size = androidx.compose.ui.geometry.Size(size.width, len),
+                blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
+            )
+        }
+    }
+
+internal fun Modifier.fadeEdges(state: androidx.compose.foundation.lazy.LazyListState): Modifier =
+    fadeEdges({ state.canScrollBackward }, { state.canScrollForward })
+
+internal fun Modifier.fadeEdges(state: androidx.compose.foundation.ScrollState): Modifier =
+    fadeEdges({ state.canScrollBackward }, { state.canScrollForward })

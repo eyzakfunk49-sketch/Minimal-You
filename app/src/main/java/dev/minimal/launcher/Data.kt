@@ -194,6 +194,8 @@ data class Config(
     val wallpaperBlur: Boolean = false,
     /** Changes when a new background image is picked, so Home reloads it. */
     val bgStamp: Long = 0L,
+    /** True when the background is a copy of the phone's own wallpaper rather than a picked picture. */
+    val bgCurrent: Boolean = false,
 )
 
 fun appPrefs(ctx: Context): SharedPreferences =
@@ -261,6 +263,7 @@ fun loadConfig(ctx: Context): Config {
         wallpaperBg = p.getBoolean("wallpaperBg", false),
         wallpaperBlur = p.getBoolean("wallpaperBlur", false),
         bgStamp = p.getLong("bgStamp", 0L),
+        bgCurrent = p.getBoolean("bgCurrent", false),
     )
 }
 
@@ -314,6 +317,7 @@ fun saveConfig(ctx: Context, c: Config) {
         .putBoolean("wallpaperBg", c.wallpaperBg)
         .putBoolean("wallpaperBlur", c.wallpaperBlur)
         .putLong("bgStamp", c.bgStamp)
+        .putBoolean("bgCurrent", c.bgCurrent)
         .apply()
 }
 

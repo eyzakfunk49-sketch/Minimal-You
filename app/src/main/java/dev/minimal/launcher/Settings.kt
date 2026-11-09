@@ -179,7 +179,7 @@ internal fun SettingsScreen(
 
     val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            if (saveHomeBackground(ctx, uri)) onConfig(cfg.copy(wallpaperBg = true, bgStamp = System.currentTimeMillis()))
+            if (saveHomeBackground(ctx, uri)) onConfig(cfg.copy(wallpaperBg = true, bgCurrent = false, bgStamp = System.currentTimeMillis()))
             else Toast.makeText(ctx, "That doesn't look like a picture", Toast.LENGTH_LONG).show()
         }
     }
@@ -277,18 +277,17 @@ internal fun SettingsScreen(
                 }
 
                 val listState = rememberLazyListState()
-                LazyColumn(Modifier.weight(1f), state = listState, contentPadding = PaddingValues(bottom = 40.dp)) {
+                LazyColumn(Modifier.weight(1f).fadeEdges(listState), state = listState, contentPadding = PaddingValues(bottom = 40.dp)) {
                     when (target) {
                         null -> {
                             val cats = listOf(
                                 Triple(SettingsPage.FAVORITES, "Favorites", if (favorites.isEmpty()) "None yet" else "${favorites.size} on Home"),
                                 Triple(SettingsPage.HOME, "Home screen", "Clock, date, weather, calendar"),
-                                Triple(SettingsPage.APPS, "Apps", "Hidden apps, dots, tap actions"),
-                                Triple(SettingsPage.ORGANIZE, "App organization", "Folders and app locking"),
+                                Triple(SettingsPage.APPS, "Apps", "Hidden apps, folders, locking, dots"),
                                 Triple(SettingsPage.GESTURES, "Gestures and panels", if (cfg.drawerRight) "All apps from the right" else "All apps from the bottom"),
                                 Triple(SettingsPage.SEARCH, "Search", "Sources and search engine"),
-                                Triple(SettingsPage.LOOK, "Appearance", "Font, icons, background, animations"),
-                                Triple(SettingsPage.EXTRAS, "Extras", "Timer, search extras, tutorial"),
+                                Triple(SettingsPage.LOOK, "Look and feel", "Font, icons, wallpaper, animations"),
+                                Triple(SettingsPage.EXTRAS, "Extras", "Timer, search extras, backup, tutorial"),
                             )
                             items(cats, key = { it.first.name }) { (pg, title, summary) ->
                                 Row(
@@ -576,9 +575,6 @@ internal fun SettingsScreen(
                                 }
                                 Caption(p, "Pick which app opens when you tap the clock, the date, or the weather on Home.")
                             }
-                        }
-
-                        SettingsPage.ORGANIZE -> {
                             settingsBlock {
                                 SettingsGroup(p, "Folders") {
                                     SwitchRow("Folders", cfg.foldersOn, p) { onConfig(cfg.copy(foldersOn = it)) }
@@ -632,6 +628,42 @@ internal fun SettingsScreen(
                                     SwitchRow("Recent apps in the app list", cfg.recentApps, p) { onConfig(cfg.copy(recentApps = it)) }
                                 }
                                 Caption(p, "Type a sum such as 12*7 or (3+4)^2 in search to get an answer you can tap to copy.")
+                            }
+                            settingsBlock {
+                                SettingsGroup(p, "Backup") {
+                                    val c = LocalContext.current
+                                    val exportLauncher = rememberLauncherForActivityResult(
+                                        ActivityResultContracts.CreateDocument("application/json"),
+                                    ) { uri ->
+                                        if (uri != null) {
+                                            val ok = try {
+                                                c.contentResolver.openOutputStream(uri)?.use { it.write(exportSettings(c).toByteArray()) }
+                                                true
+                                            } catch (_: Exception) { false }
+                                            Toast.makeText(c, if (ok) "Settings saved" else "Couldn't save the file", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                    val importLauncher = rememberLauncherForActivityResult(
+                                        ActivityResultContracts.OpenDocument(),
+                                    ) { uri ->
+                                        if (uri != null) {
+                                            val text = try {
+                                                c.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                                            } catch (_: Exception) { null }
+                                            if (text != null && importSettings(c, text)) {
+                                                Toast.makeText(c, "Settings restored", Toast.LENGTH_SHORT).show()
+                                                var a: Context? = c
+                                                while (a is android.content.ContextWrapper && a !is Activity) a = a.baseContext
+                                                (a as? Activity)?.recreate()
+                                            } else {
+                                                Toast.makeText(c, "That isn't a MinimalYou backup", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
+                                    ActionRow("Export settings", p) { exportLauncher.launch("minimalyou-backup.json") }
+                                    ActionRow("Import settings", p) { importLauncher.launch(arrayOf("*/*")) }
+                                }
+                                Caption(p, "Saves your favorites and every setting to a file you can restore later or on another phone. Widgets aren't included.")
                             }
                             settingsBlock {
                                 SettingsGroup(p, "Help") {
@@ -724,15 +756,16 @@ internal fun SettingsScreen(
                                 Caption(p, "Turns the dark grey background true black. Only applies in dark mode.")
                             }
                             settingsBlock {
-                                SettingsGroup(p, "Home background") {
-                                    SwitchRow("Set a custom wallpaper", cfg.wallpaperBg, p) { on ->
+                                SettingsGroup(p, "Wallpaper") {
+                                    SwitchRow("Custom wallpaper", cfg.wallpaperBg, p) { on ->
                                         onConfig(cfg.copy(wallpaperBg = on))
-                                        if (on && !homeBgFile(ctx).exists()) bgPicker.launch(arrayOf("image/*"))
+                                        if (on && !cfg.bgCurrent && !homeBgFile(ctx).exists()) bgPicker.launch(arrayOf("image/*"))
                                     }
                                     if (cfg.wallpaperBg) {
-                                        ActionRow("Choose a picture", p) { bgPicker.launch(arrayOf("image/*")) }
-                                        ActionRow("Use my current wallpaper", p) {
-                                            if (!Environment.isExternalStorageManager()) {
+                                        SwitchRow("Use current wallpaper", cfg.bgCurrent, p) { on ->
+                                            if (!on) {
+                                                onConfig(cfg.copy(bgCurrent = false))
+                                            } else if (!Environment.isExternalStorageManager()) {
                                                 Toast.makeText(ctx, "Allow file access, then try again", Toast.LENGTH_LONG).show()
                                                 ctx.startActivity(
                                                     Intent(
@@ -741,15 +774,44 @@ internal fun SettingsScreen(
                                                     ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                                                 )
                                             } else if (saveSystemWallpaper(ctx)) {
-                                                onConfig(cfg.copy(bgStamp = System.currentTimeMillis()))
+                                                onConfig(cfg.copy(bgCurrent = true, bgStamp = System.currentTimeMillis()))
                                             } else {
-                                                Toast.makeText(ctx, "Android won't let apps read the current wallpaper on this phone. Use Choose a picture instead.", Toast.LENGTH_LONG).show()
+                                                Toast.makeText(ctx, "Android won't let apps read the current wallpaper on this phone. Choose a custom image instead.", Toast.LENGTH_LONG).show()
                                             }
                                         }
-                                        SwitchRow("Blur the picture", cfg.wallpaperBlur, p) { onConfig(cfg.copy(wallpaperBlur = it)) }
+                                        if (!cfg.bgCurrent) {
+                                            ActionRow("Choose a custom image", p) { bgPicker.launch(arrayOf("image/*")) }
+                                        }
+                                        SwitchRow("Blur wallpaper", cfg.wallpaperBlur, p) { onConfig(cfg.copy(wallpaperBlur = it)) }
+                                    } else {
+                                        val c = LocalContext.current
+                                        Row(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(min = 52.dp)
+                                                .softClick(role = Role.Button) {
+                                                    appPrefs(c).edit().putInt("wp_seed", c.getColor(android.R.color.system_accent1_500)).apply()
+                                                    try {
+                                                        c.startActivity(
+                                                            Intent(android.app.WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER)
+                                                                .putExtra(
+                                                                    android.app.WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
+                                                                    android.content.ComponentName(c, MatchWallpaperService::class.java),
+                                                                )
+                                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                                        )
+                                                    } catch (_: Exception) {
+                                                        Toast.makeText(c, "Couldn't open the wallpaper picker", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                },
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            BasicText("Use matching wallpaper", style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
+                                            SideChevron(left = false, color = p.muted)
+                                        }
                                     }
                                 }
-                                Caption(p, "Shows your own picture behind the Home screen, under a soft tint so the text stays easy to read. The app list, search and Settings keep their solid background.")
+                                Caption(p, if (cfg.wallpaperBg) "Shows a picture behind the Home screen, under a soft tint so the text stays easy to read. The app list, search and Settings keep their solid background." else "Use matching wallpaper sets a plain wallpaper in the same color as Home. It switches between light and dark with your phone, and keeps your current Material You colors instead of recoloring them.")
                             }
                             settingsBlock {
                                 SettingsGroup(p, "Icons") {
@@ -766,72 +828,6 @@ internal fun SettingsScreen(
                                 if (!googleSansInstalled()) {
                                     Caption(p, "Google Sans isn't installed on this phone, so it will look like Sans here.")
                                 }
-                            }
-                            settingsBlock {
-                                SettingsGroup(p, "Wallpaper") {
-                                    val c = LocalContext.current
-                                    Row(
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .heightIn(min = 52.dp)
-                                            .softClick(role = Role.Button) {
-                                                appPrefs(c).edit().putInt("wp_seed", c.getColor(android.R.color.system_accent1_500)).apply()
-                                                try {
-                                                    c.startActivity(
-                                                        Intent(android.app.WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER)
-                                                            .putExtra(
-                                                                android.app.WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
-                                                                android.content.ComponentName(c, MatchWallpaperService::class.java),
-                                                            )
-                                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                                                    )
-                                                } catch (_: Exception) {
-                                                    Toast.makeText(c, "Couldn't open the wallpaper picker", Toast.LENGTH_SHORT).show()
-                                                }
-                                            },
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        BasicText("Use matching wallpaper", style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
-                                        SideChevron(left = false, color = p.muted)
-                                    }
-                                }
-                                Caption(p, "A plain wallpaper in the same color as Home. It switches between light and dark with your phone, and keeps your current Material You colors instead of recoloring them.")
-                            }
-                            settingsBlock {
-                                SettingsGroup(p, "Backup") {
-                                    val c = LocalContext.current
-                                    val exportLauncher = rememberLauncherForActivityResult(
-                                        ActivityResultContracts.CreateDocument("application/json"),
-                                    ) { uri ->
-                                        if (uri != null) {
-                                            val ok = try {
-                                                c.contentResolver.openOutputStream(uri)?.use { it.write(exportSettings(c).toByteArray()) }
-                                                true
-                                            } catch (_: Exception) { false }
-                                            Toast.makeText(c, if (ok) "Settings saved" else "Couldn't save the file", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                    val importLauncher = rememberLauncherForActivityResult(
-                                        ActivityResultContracts.OpenDocument(),
-                                    ) { uri ->
-                                        if (uri != null) {
-                                            val text = try {
-                                                c.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                                            } catch (_: Exception) { null }
-                                            if (text != null && importSettings(c, text)) {
-                                                Toast.makeText(c, "Settings restored", Toast.LENGTH_SHORT).show()
-                                                var a: Context? = c
-                                                while (a is android.content.ContextWrapper && a !is Activity) a = a.baseContext
-                                                (a as? Activity)?.recreate()
-                                            } else {
-                                                Toast.makeText(c, "That isn't a MinimalYou backup", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
-                                    }
-                                    ActionRow("Export settings", p) { exportLauncher.launch("minimalyou-backup.json") }
-                                    ActionRow("Import settings", p) { importLauncher.launch(arrayOf("*/*")) }
-                                }
-                                Caption(p, "Saves your favorites and every setting to a file you can restore later or on another phone. Widgets aren't included.")
                             }
                             settingsBlock {
                                 SettingsGroup(p, "Animations and feedback") {

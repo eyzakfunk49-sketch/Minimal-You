@@ -466,6 +466,8 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     var tutorialOpen by remember { mutableStateOf(fresh && !appPrefs(ctx).getBoolean("tutorialDone", false)) }
     val finishTutorial = { tutorialOpen = false; appPrefs(ctx).edit().putBoolean("tutorialDone", true).apply() }
     SideEffect { appLockOn = cfg.appLock; lockedKeys = cfg.locked }
+    // Notification peek only has text to show once it has been switched on and the list re-read.
+    LaunchedEffect(cfg.notifPeek, resumes, homePress) { NotificationDotService.refreshNow() }
     // Swiping Home (or pressing it) closes these too, not only the main pages.
     LaunchedEffect(homePress) { openFolder = null; folderEdit = null; timerOpen = false; lockPickerOpen = false; renameApp = null; hiddenOpen = false }
     BackHandler(enabled = pickSlot != null) { pickSlot = null }
@@ -723,8 +725,12 @@ fun LauncherApp(homePress: Int, resumes: Int) {
             if (menuApp != null) lastMenuApp = menuApp
             AnimatedVisibility(
                 visible = menuApp != null,
-                enter = fadeIn(tw(180)) + scaleIn(tw(260, easing = EmphasizedDecel), initialScale = 0.94f),
-                exit = fadeOut(tw(120)) + scaleOut(tw(140), targetScale = 0.97f),
+                enter = fadeIn(tw(160)) +
+                    scaleIn(tw(280, easing = EmphasizedDecel), initialScale = 0.92f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 1f)) +
+                    slideInVertically(tw(300, easing = EmphasizedDecel)) { it / 6 },
+                exit = fadeOut(tw(120)) +
+                    scaleOut(tw(160, easing = EmphasizedAccel), targetScale = 0.95f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 1f)) +
+                    androidx.compose.animation.slideOutVertically(tw(160, easing = EmphasizedAccel)) { it / 8 },
             ) {
                 val app = menuApp ?: lastMenuApp
                 if (app != null) {
