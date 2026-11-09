@@ -220,19 +220,25 @@ internal fun authenticate(ctx: Context, title: String, onOk: () -> Unit) {
     }
 }
 
-/** Starts a timer in the clock app without opening it. */
+/** Starts a timer in the clock app, silently when the clock app allows it. */
 internal fun startTimer(ctx: Context, minutes: Int) {
-    try {
-        ctx.startActivity(
-            Intent(android.provider.AlarmClock.ACTION_SET_TIMER)
-                .putExtra(android.provider.AlarmClock.EXTRA_LENGTH, minutes * 60)
-                .putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, true)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
-        Toast.makeText(ctx, "Timer set for ${if (minutes == 60) "1 hour" else "$minutes min"}", Toast.LENGTH_SHORT).show()
-    } catch (_: Exception) {
-        Toast.makeText(ctx, "No clock app can start a timer", Toast.LENGTH_SHORT).show()
+    fun timerIntent(skipUi: Boolean) = Intent(android.provider.AlarmClock.ACTION_SET_TIMER)
+        .putExtra(android.provider.AlarmClock.EXTRA_LENGTH, minutes * 60)
+        .putExtra(android.provider.AlarmClock.EXTRA_MESSAGE, "Timer")
+        .putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, skipUi)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    var error: String? = null
+    // Some clock apps refuse to run silently, so fall back to showing their timer screen.
+    for (skip in listOf(true, false)) {
+        try {
+            ctx.startActivity(timerIntent(skip))
+            Toast.makeText(ctx, "Timer set for ${if (minutes == 60) "1 hour" else "$minutes min"}", Toast.LENGTH_SHORT).show()
+            return
+        } catch (e: Exception) {
+            error = e.javaClass.simpleName + (e.message?.let { ": " + it.take(80) } ?: "")
+        }
     }
+    Toast.makeText(ctx, "Couldn't start a timer ($error)", Toast.LENGTH_LONG).show()
 }
 
 internal const val NEW_FOLDER = "\u0000new"
