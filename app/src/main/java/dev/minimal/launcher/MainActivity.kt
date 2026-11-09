@@ -703,7 +703,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                         active = drawerVisible,
                         progress = { drawerP.value },
                         onLaunch = { openApp(ctx, it) },
-                        onAppMenu = { menuApp = it },
+                        onAppMenu = { buzz(); menuApp = it },
                         onClose = { drawerOpen = false },
                         onDrag = { f -> pageScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { drawerP.snapTo(f.coerceIn(0f, 1f)) } },
                         onEnd = { v ->
