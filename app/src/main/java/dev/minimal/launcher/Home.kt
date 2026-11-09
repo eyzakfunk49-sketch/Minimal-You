@@ -152,6 +152,27 @@ internal fun HomeAlign.horizontal(): Alignment.Horizontal = when (this) {
     HomeAlign.RIGHT -> Alignment.End
 }
 
+/**
+ * Thin digits in any font. Where the system has a real thin face ([thin]) it is used. Fonts that have no thin
+ * weight (serif, mono, casual, custom files) get the same look by drawing the digits and then shaving a hair off
+ * every edge with the background color.
+ */
+@Composable
+private fun ThinClockText(text: String, base: TextStyle, thin: FontFamily?, bg: Color) {
+    if (thin != null) {
+        BasicText(text, style = base.copy(fontFamily = thin, fontWeight = FontWeight.Thin))
+        return
+    }
+    val px = with(LocalDensity.current) { base.fontSize.toPx() }
+    Box {
+        BasicText(text, style = base)
+        BasicText(
+            text,
+            style = base.copy(color = bg, drawStyle = Stroke(px * 0.034f, join = androidx.compose.ui.graphics.StrokeJoin.Round)),
+        )
+    }
+}
+
 @Composable
 internal fun ClockText(
     p: Palette,
@@ -165,7 +186,7 @@ internal fun ClockText(
     val hm = f(if (is24) "H:mm" else "h:mm")
     when (style) {
         ClockStyle.LARGE -> BasicText(hm, style = ts(p.ink, 96.sp, FontWeight.Light, (-4).sp, 104.sp))
-        ClockStyle.THIN -> BasicText(hm, style = ts(p.ink, 104.sp, FontWeight.Thin, (-3).sp, 110.sp).let { if (thin != null) it.copy(fontFamily = thin) else it })
+        ClockStyle.THIN -> ThinClockText(hm, ts(p.ink, 104.sp, FontWeight.Light, (-3).sp, 110.sp), thin, p.bg)
         ClockStyle.BOLD -> BasicText(hm, style = ts(p.ink, 96.sp, FontWeight.Bold, (-4).sp, 104.sp))
         // Hours in the text color, minutes in the accent color.
         ClockStyle.TWO_TONE -> BasicText(
@@ -178,8 +199,8 @@ internal fun ClockText(
             style = ts(p.ink, 96.sp, FontWeight.Light, (-4).sp, 104.sp),
         )
         ClockStyle.THIN_STACKED -> Column(horizontalAlignment = align) {
-            BasicText(f(if (is24) "HH" else "hh"), style = ts(p.ink, 96.sp, FontWeight.Thin, (-2).sp, 90.sp).let { if (thin != null) it.copy(fontFamily = thin) else it })
-            BasicText(f("mm"), style = ts(p.accent, 96.sp, FontWeight.Thin, (-2).sp, 90.sp).let { if (thin != null) it.copy(fontFamily = thin) else it })
+            ThinClockText(f(if (is24) "HH" else "hh"), ts(p.ink, 96.sp, FontWeight.Light, (-2).sp, 90.sp), thin, p.bg)
+            ThinClockText(f("mm"), ts(p.accent, 96.sp, FontWeight.Light, (-2).sp, 90.sp), thin, p.bg)
         }
         ClockStyle.COMPACT -> BasicText(hm, style = ts(p.ink, 48.sp, FontWeight.Normal, (-1).sp, 56.sp))
         ClockStyle.STACKED -> Column(horizontalAlignment = align) {

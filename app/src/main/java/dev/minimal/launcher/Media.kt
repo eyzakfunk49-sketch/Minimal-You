@@ -53,6 +53,7 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.border
@@ -159,6 +160,8 @@ import androidx.compose.ui.semantics.role
 /** What the player shows. Fed from whichever media session is active. */
 class MediaUi {
     private var active by mutableStateOf(false)
+    /** Swiped away. Comes back by itself when a new song starts or playback resumes. */
+    var dismissed by mutableStateOf(false)
     var title by mutableStateOf("")
     var artist by mutableStateOf("")
     var art by mutableStateOf<android.graphics.Bitmap?>(null)
@@ -174,7 +177,7 @@ class MediaUi {
     private var speed = 1f
     var controller: MediaController? = null
 
-    val visible: Boolean get() = active && (title.isNotEmpty() || artist.isNotEmpty())
+    val visible: Boolean get() = active && !dismissed && (title.isNotEmpty() || artist.isNotEmpty())
 
     fun position(): Long {
         val raw = if (playing) basePosition + ((SystemClock.elapsedRealtime() - baseTime) * speed).toLong() else basePosition
@@ -182,14 +185,16 @@ class MediaUi {
     }
 
     fun clear() {
-        active = false; playing = false; title = ""; artist = ""; art = null; duration = 0L
+        active = false; dismissed = false; playing = false; title = ""; artist = ""; art = null; duration = 0L
         canSeek = false; canNext = false; canPrev = false; controller = null
     }
 
     fun updateState(s: PlaybackState?) {
         val st = s?.state ?: PlaybackState.STATE_NONE
         active = st == PlaybackState.STATE_PLAYING || st == PlaybackState.STATE_PAUSED || st == PlaybackState.STATE_BUFFERING
-        playing = st == PlaybackState.STATE_PLAYING || st == PlaybackState.STATE_BUFFERING
+        val nowPlaying = st == PlaybackState.STATE_PLAYING || st == PlaybackState.STATE_BUFFERING
+        if (nowPlaying && !playing) dismissed = false
+        playing = nowPlaying
         basePosition = (s?.position ?: 0L).coerceAtLeast(0L)
         baseTime = s?.lastPositionUpdateTime ?: SystemClock.elapsedRealtime()
         speed = s?.playbackSpeed ?: 1f
@@ -201,6 +206,8 @@ class MediaUi {
     }
 
     fun updateMeta(m: MediaMetadata?) {
+        val newTitle = m?.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE) ?: m?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: ""
+        if (newTitle != title) dismissed = false
         title = m?.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE) ?: m?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: ""
         artist = m?.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: m?.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
             ?: m?.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE) ?: ""
@@ -288,9 +295,53 @@ internal fun MediaPlayerCard(p: Palette, ui: MediaUi, modifier: Modifier = Modif
     }
     val frac = dragFrac ?: if (ui.duration > 0) (pos.toFloat() / ui.duration).coerceIn(0f, 1f) else 0f
 
+    // Swipe sideways to send it away, like a notification. The seek bar and buttons keep their own touches.
+    var swipeX by remember { mutableStateOf(0f) }
+    var width by remember { mutableStateOf(1f) }
+    val scope = rememberCoroutineScope()
+
     Column(
         modifier
             .fillMaxWidth()
+            .onSizeChanged { width = it.width.toFloat().coerceAtLeast(1f) }
+            // This sits outside the moving layer below, so the finger's position isn't shifted by the card moving.
+            .pointerInput(Unit) {
+                val slop = viewConfiguration.touchSlop
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
+                    tracker.addPosition(down.uptimeMillis, down.position)
+                    var dragging = false
+                    var total = 0f
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        if (!dragging && change.isConsumed) break // the seek bar or a button already took this touch
+                        tracker.addPosition(change.uptimeMillis, change.position)
+                        val dx = change.positionChange().x
+                        total += dx
+                        if (!dragging && kotlin.math.abs(total) > slop) dragging = true
+                        if (dragging) {
+                            change.consume()
+                            swipeX += dx
+                        }
+                    }
+                    if (dragging) {
+                        val v = tracker.calculateVelocity().x
+                        val away = kotlin.math.abs(swipeX) > width * 0.35f || kotlin.math.abs(v) > 1800f
+                        val target = if (away) (if (swipeX + v * 0.05f >= 0f) width * 1.2f else -width * 1.2f) else 0f
+                        scope.launch {
+                            androidx.compose.animation.core.animate(swipeX, target, v, sp(1f, 500f)) { value, _ -> swipeX = value }
+                            if (away) ui.dismissed = true
+                        }
+                    }
+                }
+            }
+            .graphicsLayer {
+                translationX = swipeX
+                alpha = 1f - (kotlin.math.abs(swipeX) / width).coerceIn(0f, 1f) * 0.85f
+            }
             .background(p.pill, RoundedCornerShape(32.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
