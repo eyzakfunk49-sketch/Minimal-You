@@ -92,6 +92,22 @@ fun googleSansInstalled(): Boolean =
         java.io.File(dir).listFiles()?.any { it.name.startsWith("GoogleSans", ignoreCase = true) } == true
     }
 
+/**
+ * A real thin Google Sans. The edge-shaving trick used for other fonts leaves notches in Google Sans (its glyphs are
+ * built from overlapping shapes), so this asks the installed font for its thinnest weight instead.
+ */
+val GoogleThinFamily: FontFamily by lazy {
+    val file = listOf("/system/fonts", "/product/fonts", "/system_ext/fonts", "/vendor/fonts")
+        .mapNotNull { java.io.File(it).listFiles()?.toList() }.flatten()
+        .filter { it.name.startsWith("GoogleSans", ignoreCase = true) && !it.name.contains("Italic", ignoreCase = true) && !it.name.contains("Mono", ignoreCase = true) }
+        .sortedByDescending { it.name.contains("VF", ignoreCase = true) || it.name.contains("[") || it.name.contains("Flex", ignoreCase = true) }
+        .firstOrNull()
+    val built = try {
+        if (file != null) Typeface.Builder(file).setFontVariationSettings("'wght' 100").build() else null
+    } catch (_: Exception) { null }
+    FontFamily(built ?: Typeface.create(Typeface.create("google-sans", Typeface.NORMAL), 100, false))
+}
+
 fun Config.fontFamily(): FontFamily = font.family
 
 enum class ClockStyle(val label: String) {

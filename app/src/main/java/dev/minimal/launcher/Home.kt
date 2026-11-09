@@ -412,7 +412,11 @@ internal fun Home(
                     ClockText(
                         p, cfg.clock, now, is24, cfg.homeAlign.horizontal(),
                         // Only swapped in for the built-in sans fonts; a serif, mono or custom font keeps its own look.
-                        thin = if (cfg.font == AppFont.SANS || cfg.font == AppFont.CONDENSED) ThinFamily else null,
+                        thin = when (cfg.font) {
+                            AppFont.SANS, AppFont.CONDENSED -> ThinFamily
+                            AppFont.GOOGLE_SANS -> GoogleThinFamily
+                            else -> null
+                        },
                     )
                 }
             }
