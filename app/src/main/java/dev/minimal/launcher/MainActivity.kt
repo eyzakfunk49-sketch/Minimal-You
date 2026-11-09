@@ -516,10 +516,17 @@ fun LauncherApp(homePress: Int, resumes: Int) {
         }
     }
 
-    val favorites = remember(apps, favKeys) {
+    // Folders sit among the favorites like apps do, using a made-up entry ("folder/Name") that is never launched.
+    val favorites = remember(apps, favKeys, cfg.folders, cfg.foldersOn) {
         val keys = favKeys
-        if (keys == null) defaultFavorites(apps)
-        else { val byKey = apps.associateBy { it.key }; keys.mapNotNull { byKey[it] } }
+        val byKey = apps.associateBy { it.key }
+        val liveFolders = if (cfg.foldersOn) cfg.folders.filter { it.value.isNotEmpty() }.keys else emptySet()
+        fun folderApp(n: String) = App(n, android.content.ComponentName("folder", n))
+        val base = if (keys == null) defaultFavorites(apps) else keys.mapNotNull { k ->
+            if (k.startsWith("folder/")) k.removePrefix("folder/").takeIf { it in liveFolders }?.let { folderApp(it) } else byKey[k]
+        }
+        // Folders that haven't been placed yet go at the end.
+        base + liveFolders.filter { n -> base.none { it.key == "folder/$n" } }.map { folderApp(it) }
     }
 
     val setFavs: (List<String>) -> Unit = { next ->
@@ -856,6 +863,10 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                 FolderEditor(
                     p, editing, visibleApps, editing?.let { cfg.folders[it] } ?: emptyList(),
                     onSave = { n, keys ->
+                        if (editing != null && editing != n) {
+                            // Keep a renamed folder in the same spot on Home.
+                            setFavs(favorites.map { it.key }.map { if (it == "folder/$editing") "folder/$n" else it })
+                        }
                         updateCfg(cfg.copy(folders = cfg.folders.filterKeys { it != editing && it != n } + (n to keys)))
                         folderEdit = null
                     },

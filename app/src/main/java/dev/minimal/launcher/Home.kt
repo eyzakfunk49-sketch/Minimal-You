@@ -469,9 +469,7 @@ internal fun Home(
         ) {
             // When the list plus the media player won't fit, the spacing between the apps tightens first.
             // Only if that still isn't enough do the names themselves shrink a little.
-            // Folders follow the favorites. They are drawn like apps, using a made-up entry that is never launched.
-            val folderRows = if (cfg.foldersOn) cfg.folders.filter { it.value.isNotEmpty() }.keys.map { App(it, android.content.ComponentName("folder", it)) } else emptyList()
-            val shown = (favorites.take(maxFavorites(cfg)) + folderRows).take(maxFavorites(cfg))
+            val shown = favorites.take(maxFavorites(cfg))
             val rowDp = 48f
             val tightest = 34f
             val perRow = if (shown.isEmpty()) rowDp else maxHeight.value / shown.size

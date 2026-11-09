@@ -211,14 +211,6 @@ internal fun SettingsScreen(
         onSetFavs(list)
     }
 
-    fun moveFolder(i: Int, delta: Int) {
-        val names = cfg.folders.keys.toMutableList()
-        val j = i + delta
-        if (j !in names.indices) return
-        val t = names[i]; names[i] = names[j]; names[j] = t
-        onConfig(cfg.copy(folders = LinkedHashMap<String, List<String>>().also { m -> names.forEach { n -> m[n] = cfg.folders[n] ?: emptyList() } }))
-    }
-
     fun setCity() {
         val name = cityInput.trim()
         if (name.isEmpty()) return
@@ -321,7 +313,7 @@ internal fun SettingsScreen(
                         }
 
                         SettingsPage.FAVORITES -> {
-                            item(key = "cap") { Caption(p, "Up to $maxFavs apps show on Home. Reorder them, and your folders, with the arrows." + if (cfg.showClock) " Hide the clock to fit 9." else "") }
+                            item(key = "cap") { Caption(p, "Up to $maxFavs apps show on Home. Reorder them, and any folders, with the arrows." + if (cfg.showClock) " Hide the clock to fit 9." else "") }
                             if (favorites.isEmpty()) {
                                 item(key = "empty") { Caption(p, "No favorites yet. Add some below.") }
                             }
@@ -334,34 +326,19 @@ internal fun SettingsScreen(
                                         .padding(start = 20.dp, end = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
+                                    val isFolder = app.component.packageName == "folder"
                                     BasicText(
                                         app.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                         style = ts(p.ink, 20.sp),
-                                        modifier = Modifier.weight(1f),
+                                        modifier = Modifier.weight(1f, fill = !isFolder),
                                     )
+                                    if (isFolder) {
+                                        BasicText("folder", style = ts(p.muted, 14.sp, FontWeight.Normal), modifier = Modifier.weight(1f).padding(start = 8.dp))
+                                    }
                                     IconBtn(Glyph.UP, "Move ${app.label} up", if (i > 0) p.muted else p.muted.copy(alpha = 0.3f), i > 0) { move(i, -1) }
                                     IconBtn(Glyph.DOWN, "Move ${app.label} down", if (i < favorites.lastIndex) p.muted else p.muted.copy(alpha = 0.3f), i < favorites.lastIndex) { move(i, 1) }
-                                    IconBtn(Glyph.CLOSE, "Remove ${app.label}", p.muted) { onSetFavs(favKeys - app.key) }
-                                }
-                            }
-                            if (cfg.foldersOn && cfg.folders.isNotEmpty()) {
-                                item(key = "folderHead") {
-                                    BasicText("FOLDERS", style = ts(p.muted, 13.sp, FontWeight.Medium, 1.sp), modifier = Modifier.padding(start = 8.dp, top = 20.dp, bottom = 4.dp))
-                                }
-                                val folderNames = cfg.folders.keys.toList()
-                                itemsIndexed(folderNames, key = { _, n -> "folder_$n" }) { i, name ->
-                                    Row(
-                                        itemAnim()
-                                            .padding(vertical = 4.dp)
-                                            .fillMaxWidth()
-                                            .background(p.pill.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
-                                            .padding(start = 20.dp, end = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        BasicText(name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ts(p.ink, 20.sp), modifier = Modifier.weight(1f))
-                                        IconBtn(Glyph.UP, "Move $name up", if (i > 0) p.muted else p.muted.copy(alpha = 0.3f), i > 0) { moveFolder(i, -1) }
-                                        IconBtn(Glyph.DOWN, "Move $name down", if (i < folderNames.lastIndex) p.muted else p.muted.copy(alpha = 0.3f), i < folderNames.lastIndex) { moveFolder(i, 1) }
-                                    }
+                                    if (isFolder) Spacer(Modifier.width(48.dp))
+                                    else IconBtn(Glyph.CLOSE, "Remove ${app.label}", p.muted) { onSetFavs(favKeys - app.key) }
                                 }
                             }
                             item(key = "addBtn") {
@@ -624,7 +601,7 @@ internal fun SettingsScreen(
                                         ActionRow("New folder", p) { onEditFolder(null) }
                                     }
                                 }
-                                Caption(p, "Folders show on Home after your favorites and count toward its limit. Tap one to open it, or touch and hold to edit it.")
+                                Caption(p, "Folders show on Home among your favorites and count toward its limit. Move them in Favorites. Tap one to open it, or touch and hold to edit it.")
                             }
                             settingsBlock {
                                 SettingsGroup(p, "App locking") {
