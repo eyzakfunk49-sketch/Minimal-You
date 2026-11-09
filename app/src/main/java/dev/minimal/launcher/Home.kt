@@ -187,6 +187,7 @@ internal fun ClockText(
     when (style) {
         ClockStyle.LARGE -> BasicText(hm, style = ts(p.ink, 96.sp, FontWeight.Light, (-4).sp, 104.sp))
         ClockStyle.THIN -> ThinClockText(hm, ts(p.ink, 104.sp, FontWeight.Light, (-3).sp, 110.sp), thin, p.bg)
+        ClockStyle.MATERIAL_THIN -> ThinClockText(hm, ts(p.accent, 104.sp, FontWeight.Light, (-3).sp, 110.sp), thin, p.bg)
         ClockStyle.BOLD -> BasicText(hm, style = ts(p.ink, 96.sp, FontWeight.Bold, (-4).sp, 104.sp))
         // Hours in the text color, minutes in the accent color.
         ClockStyle.TWO_TONE -> BasicText(
@@ -456,14 +457,18 @@ internal fun Home(
                 HomeAlign.RIGHT -> if (centered) Alignment.CenterEnd else Alignment.BottomEnd
             },
         ) {
-            // When the list plus the media player won't fit, everything shrinks a little instead of getting cut off.
+            // When the list plus the media player won't fit, the spacing between the apps tightens first.
+            // Only if that still isn't enough do the names themselves shrink a little.
             val shown = favorites.take(maxFavorites(cfg))
             val rowDp = 48f
-            val fit = if (shown.isEmpty()) 1f else (maxHeight.value / (shown.size * rowDp)).coerceIn(0.6f, 1f)
+            val tightest = 34f
+            val perRow = if (shown.isEmpty()) rowDp else maxHeight.value / shown.size
+            val rowH = perRow.coerceIn(tightest, rowDp)
+            val fit = (perRow / tightest).coerceIn(0.6f, 1f)
             Column(horizontalAlignment = cfg.homeAlign.horizontal()) {
                 shown.forEach {
                     AppRow(
-                        it, (30f * fit).sp, p.ink, minHeight = (rowDp * fit).dp, onClick = { onLaunch(it) },
+                        it, (30f * fit).sp, p.ink, minHeight = rowH.dp, onClick = { onLaunch(it) },
                         onLongClick = { onBuzz(); onAppMenu(it) }, weight = FontWeight.Normal,
                         marker = if (cfg.notifDots && it.component.packageName in NotifState.active) p.accent else null,
                     )
