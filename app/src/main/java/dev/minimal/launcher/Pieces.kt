@@ -235,7 +235,7 @@ internal fun Reveal(visible: Boolean, content: @Composable () -> Unit) {
         visible = visible,
         enter = androidx.compose.animation.fadeIn(tw(200)) + androidx.compose.animation.expandVertically(tw(280, EmphasizedDecel)),
         exit = androidx.compose.animation.fadeOut(tw(120)) + androidx.compose.animation.shrinkVertically(tw(200, EmphasizedAccel)),
-    ) { content() }
+    ) { Column(Modifier.fillMaxWidth()) { content() } }
 }
 
 /** The three-line handle you hold to drag a row. */
