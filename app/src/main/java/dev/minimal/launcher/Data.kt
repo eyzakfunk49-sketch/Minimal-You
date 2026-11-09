@@ -95,7 +95,7 @@ fun googleSansInstalled(): Boolean =
 fun Config.fontFamily(): FontFamily = font.family
 
 enum class ClockStyle(val label: String) {
-    LARGE("Large"), THIN("Thin"), BOLD("Bold"), TWO_TONE("Two-tone"), COMPACT("Compact"), STACKED("Stacked"), THIN_STACKED("Thin stacked"),
+    LARGE("Large"), THIN("Thin"), BOLD("Bold"), TWO_TONE("Two-tone"), COMPACT("Compact"), MATERIAL("Material"),
 }
 
 enum class HomeAlign(val label: String) {

@@ -198,15 +198,9 @@ internal fun ClockText(
             },
             style = ts(p.ink, 96.sp, FontWeight.Light, (-4).sp, 104.sp),
         )
-        ClockStyle.THIN_STACKED -> Column(horizontalAlignment = align) {
-            ThinClockText(f(if (is24) "HH" else "hh"), ts(p.ink, 96.sp, FontWeight.Light, (-2).sp, 90.sp), thin, p.bg)
-            ThinClockText(f("mm"), ts(p.accent, 96.sp, FontWeight.Light, (-2).sp, 90.sp), thin, p.bg)
-        }
         ClockStyle.COMPACT -> BasicText(hm, style = ts(p.ink, 48.sp, FontWeight.Normal, (-1).sp, 56.sp))
-        ClockStyle.STACKED -> Column(horizontalAlignment = align) {
-            BasicText(f(if (is24) "HH" else "hh"), style = ts(p.ink, 88.sp, FontWeight.Light, (-2).sp, 84.sp))
-            BasicText(f("mm"), style = ts(p.accent, 88.sp, FontWeight.Light, (-2).sp, 84.sp))
-        }
+        // The whole time in the accent color, with a firmer weight so it reads like a Material You clock.
+        ClockStyle.MATERIAL -> BasicText(hm, style = ts(p.accent, 100.sp, FontWeight.Medium, (-4).sp, 108.sp))
     }
 }
 
