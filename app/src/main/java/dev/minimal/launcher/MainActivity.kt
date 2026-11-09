@@ -394,7 +394,9 @@ fun LauncherApp(homePress: Int, resumes: Int) {
     BackHandler(enabled = searchOpen) { searchOpen = false }
     BackHandler(enabled = settingsOpen) { settingsOpen = false }
     BackHandler(enabled = hiddenOpen) { hiddenOpen = false }
-    BackHandler(enabled = pickSlot != null) { pickSlot = null } // registered last = handled first
+    var renameApp by remember { mutableStateOf<App?>(null) }
+    BackHandler(enabled = pickSlot != null) { pickSlot = null }
+    BackHandler(enabled = renameApp != null) { renameApp = null } // registered last = handled first
 
     // Weather: refresh every 30 minutes (every minute until the first success).
     LaunchedEffect(cfg.weatherOn, cfg.weatherLocation, cfg.city, cfg.lat, cfg.lon, cfg.fahrenheit) {
@@ -638,6 +640,7 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     val pkg = app.component.packageName
                     AppMenu(
                         p, app,
+                        onRename = { menuApp = null; renameApp = app },
                         onDismiss = { menuApp = null },
                         onInfo = {
                             menuApp = null
@@ -667,6 +670,17 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                         },
                     )
                 }
+            }
+            renameApp?.let { app ->
+                RenameOverlay(
+                    p, app, cfg.labels[app.key],
+                    onSave = { text ->
+                        updateCfg(cfg.copy(labels = if (text.isEmpty() || text == app.label) cfg.labels - app.key else cfg.labels + (app.key to text)))
+                        renameApp = null
+                    },
+                    onReset = { updateCfg(cfg.copy(labels = cfg.labels - app.key)); renameApp = null },
+                    onDismiss = { renameApp = null },
+                )
             }
             if (pillFlying && homePillY >= 0f) {
                 Box(Modifier.fillMaxSize().padding(horizontal = 32.dp)) {

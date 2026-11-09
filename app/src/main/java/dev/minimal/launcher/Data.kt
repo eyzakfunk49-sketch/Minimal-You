@@ -176,6 +176,8 @@ data class Config(
     val swipeUpSearch: Boolean = false,
     val noHaptics: Boolean = false,
     val hidden: Set<String> = emptySet(),
+    /** Names the user typed for favorites on Home (app key -> text). */
+    val labels: Map<String, String> = emptyMap(),
 )
 
 fun appPrefs(ctx: Context): SharedPreferences =
@@ -223,6 +225,10 @@ fun loadConfig(ctx: Context): Config {
         swipeUpSearch = p.getBoolean("swipeUpSearch", false),
         noHaptics = p.getBoolean("noHaptics", false),
         hidden = p.getStringSet("hidden", emptySet())?.toSet() ?: emptySet(),
+        labels = try {
+            val o = org.json.JSONObject(p.getString("labels", "{}") ?: "{}")
+            o.keys().asSequence().associateWith { o.getString(it) }
+        } catch (_: Exception) { emptyMap() },
     )
 }
 
@@ -262,6 +268,7 @@ fun saveConfig(ctx: Context, c: Config) {
         .putBoolean("swipeUpSearch", c.swipeUpSearch)
         .putBoolean("noHaptics", c.noHaptics)
         .putStringSet("hidden", c.hidden)
+        .putString("labels", org.json.JSONObject(c.labels as Map<*, *>).toString())
         .apply()
 }
 

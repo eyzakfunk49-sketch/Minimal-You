@@ -156,6 +156,7 @@ internal fun AppMenu(
     onRemove: () -> Unit,
     onHide: () -> Unit,
     onUninstall: () -> Unit,
+    onRename: (() -> Unit)? = null,
 ) {
     Box(
         Modifier
@@ -180,6 +181,7 @@ internal fun AppMenu(
                 style = ts(p.muted, 14.sp, FontWeight.Medium, 0.5.sp),
                 modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
             )
+            if (onRename != null) MenuItem("Edit name", p.ink, onRename)
             MenuItem("App info", p.ink, onInfo)
             MenuItem("Remove from Home", p.ink, onRemove)
             MenuItem("Hide app", p.ink, onHide)
@@ -437,6 +439,11 @@ internal fun AppRow(
     // Home keeps the tap target on the name only; lists (drawer, search, pickers) use the whole row.
     fullWidth: Boolean = false,
     minHeight: androidx.compose.ui.unit.Dp? = null,
+    // A wider tap area for short names on Home (still not the whole row), and where the name sits inside it.
+    minWidth: androidx.compose.ui.unit.Dp = 0.dp,
+    contentAlign: Alignment.Horizontal = Alignment.Start,
+    // Text typed by the user to show instead of the app's own name.
+    label: String? = null,
 ) {
     var textCoords by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
     // Where the middle of the letters really is inside the text box (it differs per font), so the dot lines up with them.
@@ -452,11 +459,18 @@ internal fun AppRow(
         modifier
             .then(if (fullWidth) Modifier.fillMaxWidth() else Modifier)
             .heightIn(min = minHeight ?: if (fullWidth) 56.dp else 48.dp)
+            .widthIn(min = minWidth)
             .softCombined(onClick = click, onLongClick = onLongClick),
+        horizontalArrangement = when (contentAlign) {
+            Alignment.CenterHorizontally -> Arrangement.Center
+            Alignment.End -> Arrangement.End
+            else -> Arrangement.Start
+        },
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        val shownLabel = label ?: app.label
         BasicText(
-            if (lower) app.label.lowercase() else app.label,
+            if (lower) shownLabel.lowercase() else shownLabel,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = ts(color, size, weight),
@@ -545,6 +559,64 @@ internal fun AppPicker(p: Palette, slot: Slot, apps: List<App>, onPick: (App?) -
             }
             items(apps, key = { it.key }) { app ->
                 AppRow(app, 22.sp, p.ink, onClick = { onPick(app) }, fullWidth = true)
+            }
+        }
+    }
+}
+
+
+/** A small card for typing the name shown on Home for one app. Emoji work too; the keyboard decides. */
+@Composable
+internal fun RenameOverlay(
+    p: Palette,
+    app: App,
+    current: String?,
+    onSave: (String) -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val start = current ?: app.label
+    var value by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(start, androidx.compose.ui.text.TextRange(0, start.length))) }
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(Unit) { focus.requestFocus(); keyboard?.show() }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.5f))
+            .pointerInput(Unit) { detectTapGestures { onDismiss() } }
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
+            .imePadding()
+            .padding(horizontal = 32.dp, vertical = 24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(p.pill, RoundedCornerShape(28.dp))
+                .pointerInput(Unit) { detectTapGestures { } }
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+        ) {
+            BasicText("Edit name", style = ts(p.muted, 14.sp, FontWeight.Medium, 0.5.sp))
+            Spacer(Modifier.height(12.dp))
+            BasicTextField(
+                value = value,
+                onValueChange = { value = it },
+                singleLine = true,
+                textStyle = ts(p.ink, 26.sp, FontWeight.Normal),
+                cursorBrush = SolidColor(p.accent),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { onSave(value.text.trim()) }),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            )
+            Spacer(Modifier.height(4.dp))
+            BasicText("Type a new name, or add an emoji.", style = ts(p.muted, 13.sp, FontWeight.Normal))
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                if (current != null) {
+                    BasicText("Reset", style = ts(p.muted, 18.sp), modifier = Modifier.softClick(role = Role.Button, onClick = onReset).padding(horizontal = 16.dp, vertical = 12.dp))
+                }
+                BasicText("Save", style = ts(p.accent, 18.sp, FontWeight.Medium), modifier = Modifier.softClick(role = Role.Button) { onSave(value.text.trim()) }.padding(horizontal = 16.dp, vertical = 12.dp))
             }
         }
     }

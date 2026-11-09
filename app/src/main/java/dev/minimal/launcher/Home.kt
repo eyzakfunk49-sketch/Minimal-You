@@ -472,7 +472,7 @@ internal fun Home(
             Column(horizontalAlignment = cfg.homeAlign.horizontal()) {
                 shown.forEach {
                     AppRow(
-                        it, (30f * fit).sp, p.ink, minHeight = rowH.dp, onClick = { onLaunch(it) },
+                        it, (30f * fit).sp, p.ink, minHeight = rowH.dp, minWidth = 180.dp, contentAlign = cfg.homeAlign.horizontal(), label = cfg.labels[it.key], onClick = { onLaunch(it) },
                         onLongClick = { onBuzz(); onAppMenu(it) }, weight = FontWeight.Normal,
                         marker = if (cfg.notifDots && it.component.packageName in NotifState.active) p.accent else null,
                     )
