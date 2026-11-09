@@ -692,7 +692,9 @@ fun LauncherApp(homePress: Int, resumes: Int) {
                     compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
                     if (cfg.drawerRight) translationX = (1f - drawerP.value) * size.width
                     else translationY = (1f - drawerP.value) * size.height
-                    alpha = (drawerP.value * 1.6f).coerceIn(0f, 1f)
+                    // Solid the whole way: the list slides over Home instead of cross-fading with it, so the two
+                    // never show through each other (that double exposure was the glitch).
+                    alpha = if (drawerP.value > 0.001f) 1f else 0f
                 }) {
                     Drawer(
                         p, visibleApps, favorites.map { it.key }.toSet(),
