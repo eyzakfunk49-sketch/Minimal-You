@@ -436,6 +436,7 @@ internal fun AppRow(
     modifier: Modifier = Modifier,
     // Home keeps the tap target on the name only; lists (drawer, search, pickers) use the whole row.
     fullWidth: Boolean = false,
+    minHeight: androidx.compose.ui.unit.Dp? = null,
 ) {
     var textCoords by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
     // Where the middle of the letters really is inside the text box (it differs per font), so the dot lines up with them.
@@ -450,7 +451,7 @@ internal fun AppRow(
     Row(
         modifier
             .then(if (fullWidth) Modifier.fillMaxWidth() else Modifier)
-            .heightIn(min = if (fullWidth) 56.dp else 48.dp)
+            .heightIn(min = minHeight ?: if (fullWidth) 56.dp else 48.dp)
             .softCombined(onClick = click, onLongClick = onLongClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {

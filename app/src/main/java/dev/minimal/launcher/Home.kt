@@ -454,7 +454,7 @@ internal fun Home(
         // With the clock hidden, the favorites can sit in the middle of the screen instead of at the bottom.
         val centered = cfg.centerApps && !cfg.showClock
         // The favorites live in their own flexible area, so a tall list can never push the search bar off screen.
-        Box(
+        BoxWithConstraints(
             Modifier.weight(1f).fillMaxWidth().clipToBounds(),
             contentAlignment = when (cfg.homeAlign) {
                 HomeAlign.LEFT -> if (centered) Alignment.CenterStart else Alignment.BottomStart
@@ -462,10 +462,14 @@ internal fun Home(
                 HomeAlign.RIGHT -> if (centered) Alignment.CenterEnd else Alignment.BottomEnd
             },
         ) {
+            // When the list plus the media player won't fit, everything shrinks a little instead of getting cut off.
+            val shown = favorites.take(maxFavorites(cfg))
+            val rowDp = 48f
+            val fit = if (shown.isEmpty()) 1f else (maxHeight.value / (shown.size * rowDp)).coerceIn(0.6f, 1f)
             Column(horizontalAlignment = cfg.homeAlign.horizontal()) {
-                favorites.take(maxFavorites(cfg)).forEach {
+                shown.forEach {
                     AppRow(
-                        it, 30.sp, p.ink, onClick = { onLaunch(it) },
+                        it, (30f * fit).sp, p.ink, minHeight = (rowDp * fit).dp, onClick = { onLaunch(it) },
                         onLongClick = { onBuzz(); onAppMenu(it) }, weight = FontWeight.Normal,
                         marker = if (cfg.notifDots && it.component.packageName in NotifState.active) p.accent else null,
                     )
